@@ -1,0 +1,24 @@
+{
+  "clientId": "infinity-knowledge-console",
+  "name": "Infinity Knowledge Console",
+  "description": "Browser SPA client for the local management console",
+  "enabled": true,
+  "publicClient": true,
+  "directAccessGrantsEnabled": false,
+  "standardFlowEnabled": true,
+  "rootUrl": "http://localhost:5173",
+  "baseUrl": "/",
+  "redirectUris": [
+    "http://localhost:5173/*",
+    "http://127.0.0.1:5173/*"
+  ],
+  "webOrigins": [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ],
+  "attributes": {
+    "pkce.code.challenge.method": "S256",
+    "post.logout.redirect.uris": "+"
+  },
+  "protocol": "openid-connect"
+}

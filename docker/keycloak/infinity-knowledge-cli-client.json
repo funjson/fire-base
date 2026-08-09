@@ -1,0 +1,10 @@
+{
+  "clientId": "infinity-knowledge-cli",
+  "name": "Infinity Knowledge CLI",
+  "description": "Direct access grant client for local API verification",
+  "enabled": true,
+  "publicClient": true,
+  "directAccessGrantsEnabled": true,
+  "standardFlowEnabled": false,
+  "protocol": "openid-connect"
+}

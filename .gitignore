@@ -1,0 +1,17 @@
+.idea/
+.vscode/
+.classpath
+.project
+.settings/
+target/
+node_modules/
+knowledge-console/dist/
+*.iml
+*.log
+.env
+.env.local
+.runtime/
+.DS_Store
+data/
+docker-data/
+dist/

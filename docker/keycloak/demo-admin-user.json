@@ -1,0 +1,14 @@
+{
+  "username": "demo-admin",
+  "enabled": true,
+  "email": "demo-admin@example.invalid",
+  "emailVerified": true,
+  "firstName": "Demo",
+  "lastName": "Admin",
+  "requiredActions": [],
+  "attributes": {
+    "departments": [
+      "engineering"
+    ]
+  }
+}

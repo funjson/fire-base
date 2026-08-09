@@ -1,0 +1,12 @@
+{
+  "clientId": "infinity-knowledge-api",
+  "name": "Infinity Knowledge API",
+  "description": "Bearer-only resource server for the Infinity Knowledge API",
+  "enabled": true,
+  "bearerOnly": true,
+  "publicClient": false,
+  "directAccessGrantsEnabled": false,
+  "standardFlowEnabled": false,
+  "serviceAccountsEnabled": false,
+  "protocol": "openid-connect"
+}

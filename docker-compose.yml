@@ -1,0 +1,191 @@
+name: infinity-knowledge
+
+services:
+  postgres:
+    image: postgres:17.10-alpine
+    container_name: infinity-knowledge-postgres
+    environment:
+      POSTGRES_DB: infinity_knowledge
+      POSTGRES_USER: infinity_knowledge
+      POSTGRES_PASSWORD: infinity_knowledge
+      TZ: UTC
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U infinity_knowledge -d infinity_knowledge
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.0
+    container_name: infinity-knowledge-keycloak
+    profiles:
+      - identity
+      - acceptance
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      TZ: UTC
+    ports:
+      - "8180:8080"
+      - "9100:9000"
+    volumes:
+      - ./docker/keycloak/realm-infinity-knowledge.json:/opt/keycloak/data/import/realm-infinity-knowledge.json:ro
+      - keycloak-data:/opt/keycloak/data
+
+  keycloak-config:
+    image: quay.io/keycloak/keycloak:26.7.0
+    container_name: infinity-knowledge-keycloak-config
+    profiles:
+      - identity
+      - acceptance
+    entrypoint:
+      - /bin/bash
+      - /config/configure-realm.sh
+    environment:
+      KEYCLOAK_SERVER: http://keycloak:8080
+      KEYCLOAK_ADMIN_REALM: master
+      KEYCLOAK_ADMIN_USER: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_REALM: infinity-knowledge
+    depends_on:
+      - keycloak
+    volumes:
+      - ./docker/keycloak:/config:ro
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    container_name: infinity-knowledge-milvus-etcd
+    profiles:
+      - vector
+      - acceptance
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command:
+      - etcd
+      - -advertise-client-urls=http://etcd:2379
+      - -listen-client-urls
+      - http://0.0.0.0:2379
+      - --data-dir
+      - /etcd
+    healthcheck:
+      test:
+        - CMD
+        - etcdctl
+        - endpoint
+        - health
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - milvus-etcd-data:/etcd
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    container_name: infinity-knowledge-minio
+    profiles:
+      - vector
+      - acceptance
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    command:
+      - minio
+      - server
+      - /minio_data
+      - --console-address
+      - :9001
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:9000/minio/health/live
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    volumes:
+      - milvus-minio-data:/minio_data
+
+  milvus:
+    image: milvusdb/milvus:v2.6.19
+    container_name: infinity-knowledge-milvus
+    profiles:
+      - vector
+      - acceptance
+    command:
+      - milvus
+      - run
+      - standalone
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      MINIO_REGION: us-east-1
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:9091/healthz
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    depends_on:
+      - etcd
+      - minio
+    volumes:
+      - milvus-data:/var/lib/milvus
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.4
+    container_name: infinity-knowledge-elasticsearch
+    profiles:
+      - search
+      - acceptance
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:9200/_cluster/health >/dev/null
+      interval: 10s
+      start_period: 60s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+volumes:
+  postgres-data:
+  keycloak-data:
+  milvus-etcd-data:
+  milvus-minio-data:
+  milvus-data:
+  elasticsearch-data:

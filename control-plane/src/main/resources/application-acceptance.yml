@@ -1,0 +1,26 @@
+spring:
+  config:
+    activate:
+      on-profile: acceptance
+  datasource:
+    url: ${KNOWLEDGE_DB_URL:jdbc:postgresql://localhost:5433/infinity_knowledge}
+    username: ${KNOWLEDGE_DB_USERNAME:infinity_knowledge}
+    password: ${KNOWLEDGE_DB_PASSWORD:infinity_knowledge}
+    hikari:
+      initialization-fail-timeout: 10000
+  flyway:
+    enabled: true
+
+infinity:
+  knowledge:
+    retrieval:
+      mode: hybrid
+    embedding:
+      api-key: ${ZHIPU_API_KEY}
+      proxy-host: ${KNOWLEDGE_EMBEDDING_PROXY_HOST:127.0.0.1}
+      proxy-port: ${KNOWLEDGE_EMBEDDING_PROXY_PORT:7890}
+    vector:
+      enabled: true
+    keyword:
+      elasticsearch:
+        enabled: true

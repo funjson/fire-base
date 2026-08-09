@@ -1,0 +1,14 @@
+{
+  "username": "demo-reader",
+  "enabled": true,
+  "email": "demo-reader@example.invalid",
+  "emailVerified": true,
+  "firstName": "Demo",
+  "lastName": "Reader",
+  "requiredActions": [],
+  "attributes": {
+    "departments": [
+      "engineering"
+    ]
+  }
+}

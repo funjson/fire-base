@@ -1,0 +1,363 @@
+package dev.infinityknowledge.store.milvus;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.common.ConsistencyLevel;
+import io.milvus.v2.common.DataType;
+import io.milvus.v2.common.IndexParam;
+import io.milvus.v2.service.collection.request.AddFieldReq;
+import io.milvus.v2.service.collection.request.CreateCollectionReq;
+import io.milvus.v2.service.collection.request.HasCollectionReq;
+import io.milvus.v2.service.vector.request.SearchReq;
+import io.milvus.v2.service.vector.request.UpsertReq;
+import io.milvus.v2.service.vector.request.data.FloatVec;
+import io.milvus.v2.service.vector.response.SearchResp;
+import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.identity.TenantId;
+import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
+import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
+import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
+import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
+import dev.infinityknowledge.spi.vector.VectorIndex;
+import dev.infinityknowledge.spi.vector.VectorIndexRecord;
+import dev.infinityknowledge.spi.vector.VectorSearchRequest;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Milvus 2.6 vector index with mandatory tenant and knowledge-space predicates.
+ */
+public final class MilvusVectorIndex implements VectorIndex {
+
+    private static final String ID = "id";
+    private static final String TENANT_ID = "tenant_id";
+    private static final String SPACE_ID = "space_id";
+    private static final String DOCUMENT_ID = "document_id";
+    private static final String REVISION_ID = "revision_id";
+    private static final String TITLE = "title";
+    private static final String SOURCE_URI = "source_uri";
+    private static final String SECTION_PATH = "section_path";
+    private static final String CONTENT = "content";
+    private static final String AUTHORITY = "authority";
+    private static final String VECTOR = "vector";
+    private static final List<String> OUTPUT_FIELDS = List.of(
+            TENANT_ID,
+            SPACE_ID,
+            DOCUMENT_ID,
+            REVISION_ID,
+            TITLE,
+            SOURCE_URI,
+            SECTION_PATH,
+            CONTENT,
+            AUTHORITY
+    );
+
+    private final MilvusClientV2 client;
+    private final String collectionPrefix;
+    private final int partitionCount;
+    private final ActiveRevisionGuard activeRevisionGuard;
+    private final Map<String, Boolean> ensuredCollections = new ConcurrentHashMap<>();
+
+    /**
+     * Creates the adapter.
+     *
+     * @param client Milvus client
+     * @param collectionPrefix physical collection prefix
+     * @param partitionCount number of hash partitions for the tenant partition key
+     */
+    public MilvusVectorIndex(
+            MilvusClientV2 client,
+            String collectionPrefix,
+            int partitionCount,
+            ActiveRevisionGuard activeRevisionGuard
+    ) {
+        this.client = Objects.requireNonNull(client, "client must not be null");
+        this.collectionPrefix = safeIdentifier(collectionPrefix, "collectionPrefix");
+        if (partitionCount < 1 || partitionCount > 4_096) {
+            throw new IllegalArgumentException("partitionCount must be between 1 and 4096");
+        }
+        this.partitionCount = partitionCount;
+        this.activeRevisionGuard = Objects.requireNonNull(
+                activeRevisionGuard,
+                "activeRevisionGuard must not be null"
+        );
+    }
+
+    @Override
+    public void ensureGeneration(EmbeddingSpec spec, String generation) {
+        Objects.requireNonNull(spec, "spec must not be null");
+        String collectionName = collectionName(spec, generation);
+        if (ensuredCollections.putIfAbsent(collectionName, Boolean.TRUE) != null) {
+            return;
+        }
+        try {
+            if (!client.hasCollection(
+                    HasCollectionReq.builder().collectionName(collectionName).build()
+            )) {
+                createCollection(collectionName, spec.dimensions());
+            }
+        } catch (RuntimeException failure) {
+            ensuredCollections.remove(collectionName);
+            throw failure;
+        }
+    }
+
+    @Override
+    public void upsert(List<VectorIndexRecord> records) {
+        records = List.copyOf(Objects.requireNonNull(records, "records must not be null"));
+        if (records.isEmpty()) {
+            return;
+        }
+        VectorIndexRecord first = records.getFirst();
+        ensureGeneration(first.embeddingSpec(), first.generation());
+        String collectionName = collectionName(first.embeddingSpec(), first.generation());
+        List<JsonObject> rows = new ArrayList<>(records.size());
+        for (VectorIndexRecord record : records) {
+            if (!first.embeddingSpec().equals(record.embeddingSpec())
+                    || !first.generation().equals(record.generation())) {
+                throw new IllegalArgumentException(
+                        "one vector upsert batch must target a single generation"
+                );
+            }
+            rows.add(toRow(record));
+        }
+        client.upsert(UpsertReq.builder()
+                .collectionName(collectionName)
+                .data(rows)
+                .build());
+    }
+
+    @Override
+    public List<RetrievalCandidate> search(VectorSearchRequest request) {
+        Objects.requireNonNull(request, "request must not be null");
+        if (request.accessScope().deniesAll()) {
+            return List.of();
+        }
+        ensureGeneration(request.embeddingSpec(), request.generation());
+        SearchReq search = SearchReq.builder()
+                .collectionName(collectionName(request.embeddingSpec(), request.generation()))
+                .annsField(VECTOR)
+                .metricType(IndexParam.MetricType.COSINE)
+                .limit(request.limit())
+                .filter(filter(request))
+                .filterTemplateValues(filterValues(request))
+                .outputFields(OUTPUT_FIELDS)
+                .data(List.of(new FloatVec(toFloats(request.vector()))))
+                .consistencyLevel(ConsistencyLevel.BOUNDED)
+                .build();
+        SearchResp response = client.search(search);
+        if (response.getSearchResults().isEmpty()) {
+            return List.of();
+        }
+        List<SearchResp.SearchResult> results = response.getSearchResults().getFirst();
+        List<RetrievalCandidate> candidates = new ArrayList<>(results.size());
+        for (int index = 0; index < results.size(); index++) {
+            candidates.add(toCandidate(results.get(index), index + 1));
+        }
+        return activeRevisionGuard.retainActive(
+                request.accessScope().tenantId(),
+                candidates
+        );
+    }
+
+    private void createCollection(String collectionName, int dimensions) {
+        CreateCollectionReq.CollectionSchema schema =
+                CreateCollectionReq.CollectionSchema.builder().build();
+        schema.addField(field(ID, DataType.VarChar, 36, true, false));
+        schema.addField(field(TENANT_ID, DataType.VarChar, 64, false, true));
+        schema.addField(field(SPACE_ID, DataType.VarChar, 64, false, false));
+        schema.addField(field(DOCUMENT_ID, DataType.VarChar, 36, false, false));
+        schema.addField(field(REVISION_ID, DataType.VarChar, 36, false, false));
+        schema.addField(field(TITLE, DataType.VarChar, 512, false, false));
+        schema.addField(field(SOURCE_URI, DataType.VarChar, 2_048, false, false));
+        schema.addField(field(SECTION_PATH, DataType.VarChar, 4_096, false, false));
+        schema.addField(field(CONTENT, DataType.VarChar, 65_535, false, false));
+        schema.addField(AddFieldReq.builder()
+                .fieldName(AUTHORITY)
+                .dataType(DataType.Int64)
+                .build());
+        schema.addField(AddFieldReq.builder()
+                .fieldName(VECTOR)
+                .dataType(DataType.FloatVector)
+                .dimension(dimensions)
+                .build());
+        IndexParam vectorIndex = IndexParam.builder()
+                .fieldName(VECTOR)
+                .indexName("vector_hnsw")
+                .indexType(IndexParam.IndexType.HNSW)
+                .metricType(IndexParam.MetricType.COSINE)
+                .extraParams(Map.of("M", 16, "efConstruction", 128))
+                .build();
+        try {
+            client.createCollection(CreateCollectionReq.builder()
+                    .collectionName(collectionName)
+                    .description("Infinity Knowledge immutable embedding generation")
+                    .collectionSchema(schema)
+                    .indexParams(List.of(vectorIndex))
+                    .numPartitions(partitionCount)
+                    .consistencyLevel(ConsistencyLevel.BOUNDED)
+                    .property("partitionkey.isolation", "true")
+                    .build());
+        } catch (RuntimeException creationFailure) {
+            if (!client.hasCollection(
+                    HasCollectionReq.builder().collectionName(collectionName).build()
+            )) {
+                throw creationFailure;
+            }
+        }
+    }
+
+    private static AddFieldReq field(
+            String name,
+            DataType type,
+            int maxLength,
+            boolean primary,
+            boolean partitionKey
+    ) {
+        return AddFieldReq.builder()
+                .fieldName(name)
+                .dataType(type)
+                .maxLength(maxLength)
+                .isPrimaryKey(primary)
+                .isPartitionKey(partitionKey)
+                .autoID(false)
+                .build();
+    }
+
+    private static JsonObject toRow(VectorIndexRecord record) {
+        var chunk = record.chunk();
+        JsonObject row = new JsonObject();
+        row.addProperty(ID, chunk.id().toString());
+        row.addProperty(TENANT_ID, chunk.tenantId().value());
+        row.addProperty(SPACE_ID, chunk.spaceId().value());
+        row.addProperty(DOCUMENT_ID, chunk.documentId().value().toString());
+        row.addProperty(REVISION_ID, chunk.revisionId().toString());
+        row.addProperty(TITLE, record.title());
+        row.addProperty(SOURCE_URI, record.sourceUri());
+        JsonArray path = new JsonArray();
+        chunk.sectionPath().forEach(path::add);
+        row.addProperty(SECTION_PATH, path.toString());
+        row.addProperty(CONTENT, chunk.content());
+        row.addProperty(AUTHORITY, record.authority());
+        JsonArray vector = new JsonArray();
+        record.vector().forEach(vector::add);
+        row.add(VECTOR, vector);
+        return row;
+    }
+
+    private static String filter(VectorSearchRequest request) {
+        String base = TENANT_ID + " == {tenantId} && " + SPACE_ID + " in {spaceIds}";
+        return request.accessScope().restrictsDocuments()
+                ? base + " && " + DOCUMENT_ID + " in {documentIds}"
+                : base;
+    }
+
+    private static Map<String, Object> filterValues(VectorSearchRequest request) {
+        Map<String, Object> values = new java.util.HashMap<>();
+        values.put("tenantId", request.accessScope().tenantId().value());
+        values.put(
+                "spaceIds",
+                request.accessScope().spaceIds().stream()
+                        .map(KnowledgeSpaceId::value)
+                        .toList()
+        );
+        if (request.accessScope().restrictsDocuments()) {
+            values.put("documentIds", List.copyOf(request.accessScope().documentIds()));
+        }
+        return Map.copyOf(values);
+    }
+
+    private static RetrievalCandidate toCandidate(
+            SearchResp.SearchResult result,
+            int rank
+    ) {
+        Map<String, Object> entity = result.getEntity();
+        return new RetrievalCandidate(
+                UUID.fromString(primaryKey(result)),
+                new TenantId(requiredString(entity, TENANT_ID)),
+                new KnowledgeSpaceId(requiredString(entity, SPACE_ID)),
+                new DocumentId(UUID.fromString(requiredString(entity, DOCUMENT_ID))),
+                UUID.fromString(requiredString(entity, REVISION_ID)),
+                RetrievalChannel.VECTOR,
+                rank,
+                normalizeScore(result.getScore()),
+                requiredString(entity, TITLE),
+                parseSectionPath(requiredString(entity, SECTION_PATH)),
+                requiredString(entity, CONTENT),
+                requiredString(entity, SOURCE_URI),
+                Map.of(
+                        "retriever", "milvus-2.6",
+                        "authority", requiredString(entity, AUTHORITY)
+                )
+        );
+    }
+
+    private static String primaryKey(SearchResp.SearchResult result) {
+        Object id = result.getId();
+        if (id != null) {
+            return id.toString();
+        }
+        if (result.getPrimaryKey() != null && !result.getPrimaryKey().isBlank()) {
+            return result.getPrimaryKey();
+        }
+        throw new IllegalStateException("Milvus result omitted the primary key");
+    }
+
+    private static List<String> parseSectionPath(String value) {
+        JsonArray json = com.google.gson.JsonParser.parseString(value).getAsJsonArray();
+        List<String> values = new ArrayList<>(json.size());
+        json.forEach(item -> values.add(item.getAsString()));
+        return List.copyOf(values);
+    }
+
+    private static String requiredString(Map<String, Object> values, String field) {
+        Object value = values.get(field);
+        if (value == null) {
+            throw new IllegalStateException("Milvus result omitted field " + field);
+        }
+        return value.toString();
+    }
+
+    private static double normalizeScore(Float score) {
+        if (score == null || !Float.isFinite(score)) {
+            throw new IllegalStateException("Milvus returned an invalid score");
+        }
+        return Math.max(0.0D, Math.min(1.0D, score.doubleValue()));
+    }
+
+    private static List<Float> toFloats(List<Double> values) {
+        return values.stream().map(Double::floatValue).toList();
+    }
+
+    private String collectionName(EmbeddingSpec spec, String generation) {
+        return String.join(
+                "_",
+                collectionPrefix,
+                safeIdentifier(spec.providerId(), "providerId"),
+                safeIdentifier(spec.modelId(), "modelId"),
+                Integer.toString(spec.dimensions()),
+                safeIdentifier(generation, "generation")
+        );
+    }
+
+    private static String safeIdentifier(String value, String name) {
+        Objects.requireNonNull(value, name + " must not be null");
+        String normalized = value.strip()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9_]", "_")
+                .replaceAll("_+", "_")
+                .replaceAll("^_+|_+$", "");
+        if (normalized.isEmpty() || normalized.length() > 64) {
+            throw new IllegalArgumentException(name + " must form a 1..64 character identifier");
+        }
+        return normalized;
+    }
+}

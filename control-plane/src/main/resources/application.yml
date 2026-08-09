@@ -1,0 +1,100 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+logging:
+  pattern:
+    level: "%5p [request_id:%X{request_id:-}]"
+
+spring:
+  application:
+    name: infinity-knowledge
+  datasource:
+    url: ${KNOWLEDGE_DB_URL:jdbc:postgresql://localhost:5433/infinity_knowledge}
+    username: ${KNOWLEDGE_DB_USERNAME:infinity_knowledge}
+    password: ${KNOWLEDGE_DB_PASSWORD:infinity_knowledge}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 5000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8180/realms/infinity-knowledge}
+          audiences:
+            - ${OIDC_AUDIENCE:infinity-knowledge-api}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+infinity:
+  knowledge:
+    security:
+      trusted-system-clients: ${KNOWLEDGE_TRUSTED_SYSTEM_CLIENTS:}
+    web:
+      allowed-origins: ${KNOWLEDGE_WEB_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+    retrieval:
+      mode: standard
+      candidate-multiplier: 5
+      rrf-constant: 60
+      sufficient-threshold: 0.5
+      parallelism: 4
+      queue-capacity: 256
+    ingestion:
+      target-chunk-characters: 1200
+      maximum-chunk-characters: 2000
+      allowed-source-schemes: ${KNOWLEDGE_ALLOWED_SOURCE_SCHEMES:http,https,obsidian}
+    connectors:
+      obsidian:
+        allowed-roots: ${KNOWLEDGE_OBSIDIAN_ALLOWED_ROOTS:}
+        batch-size: 100
+        max-file-bytes: 2097152
+    indexing:
+      batch-size: 8
+      poll-interval: 1s
+      lease-duration: 2m
+      max-attempts: 5
+      initial-backoff: 2s
+      max-backoff: 5m
+    embedding:
+      provider: zhipu
+      model: embedding-3
+      dimensions: 2048
+      generation: ${KNOWLEDGE_EMBEDDING_GENERATION:v1}
+      endpoint: https://open.bigmodel.cn/api/paas/v4/embeddings
+      api-key: ${ZHIPU_API_KEY:}
+      request-timeout: 30s
+      max-batch-size: 32
+      max-attempts: 3
+      initial-backoff: 250ms
+      proxy-host: ${KNOWLEDGE_EMBEDDING_PROXY_HOST:}
+      proxy-port: ${KNOWLEDGE_EMBEDDING_PROXY_PORT:0}
+    vector:
+      enabled: ${KNOWLEDGE_VECTOR_ENABLED:false}
+      uri: ${KNOWLEDGE_MILVUS_URI:http://localhost:19530}
+      token: ${KNOWLEDGE_MILVUS_TOKEN:}
+      collection-prefix: knowledge_chunks
+      partition-count: 64
+      connect-timeout: 10s
+      rpc-deadline: 30s
+    keyword:
+      elasticsearch:
+        enabled: ${KNOWLEDGE_ELASTICSEARCH_ENABLED:false}
+        endpoint: ${KNOWLEDGE_ELASTICSEARCH_ENDPOINT:http://localhost:9200}
+        index-name: ${KNOWLEDGE_ELASTICSEARCH_INDEX:knowledge_chunks_v1}
+        api-key: ${KNOWLEDGE_ELASTICSEARCH_API_KEY:}
+        username: ${KNOWLEDGE_ELASTICSEARCH_USERNAME:}
+        password: ${KNOWLEDGE_ELASTICSEARCH_PASSWORD:}
+        connect-timeout: 5s
+        request-timeout: 15s
