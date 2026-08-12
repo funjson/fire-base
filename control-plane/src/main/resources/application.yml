@@ -9,6 +9,19 @@ logging:
 spring:
   application:
     name: infinity-knowledge
+  task:
+    scheduling:
+      pool:
+        size: ${KNOWLEDGE_SCHEDULER_POOL_SIZE:3}
+      thread-name-prefix: knowledge-scheduler-
+      shutdown:
+        await-termination: true
+        await-termination-period: 30s
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
+      file-size-threshold: 0
   datasource:
     url: ${KNOWLEDGE_DB_URL:jdbc:postgresql://localhost:5433/infinity_knowledge}
     username: ${KNOWLEDGE_DB_USERNAME:infinity_knowledge}
@@ -51,19 +64,80 @@ infinity:
       sufficient-threshold: 0.5
       parallelism: 4
       queue-capacity: 256
+      request-timeout: 35s
+      channel-timeout: 30s
+      reranker:
+        enabled: ${KNOWLEDGE_RERANKER_ENABLED:false}
+        max-candidates: 24
+        max-query-characters: 4096
+        max-candidate-characters: 8000
+        max-total-characters: 100000
     ingestion:
       target-chunk-characters: 1200
       maximum-chunk-characters: 2000
       allowed-source-schemes: ${KNOWLEDGE_ALLOWED_SOURCE_SCHEMES:http,https,obsidian}
+      files:
+        maximum-source-bytes: 26214400
+        maximum-expanded-bytes: 104857600
+        maximum-pages: 500
+        maximum-elements: 20000
+        maximum-text-characters: 10000000
+        maximum-archive-entries: 10000
+        maximum-compression-ratio: 100
+    object-storage:
+      minio:
+        endpoint: ${KNOWLEDGE_MINIO_ENDPOINT:http://localhost:9002}
+        access-key: ${KNOWLEDGE_MINIO_ACCESS_KEY:minioadmin}
+        secret-key: ${KNOWLEDGE_MINIO_SECRET_KEY:minioadmin}
+        bucket: ${KNOWLEDGE_MINIO_BUCKET:infinity-knowledge-source}
+        maximum-object-bytes: 26214400
+        create-bucket: ${KNOWLEDGE_MINIO_CREATE_BUCKET:true}
+    wiki:
+      generative-enabled: ${KNOWLEDGE_WIKI_GENERATIVE_ENABLED:false}
+      endpoint: ${KNOWLEDGE_WIKI_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+      api-key: ${ZHIPU_API_KEY:}
+      model: ${KNOWLEDGE_WIKI_MODEL:glm-4-flash}
+      request-timeout: 60s
+      max-attempts: 2
+      initial-backoff: 300ms
+      max-input-characters: 120000
+      max-output-tokens: 4096
+      minimum-source-coverage: 0.5
+      proxy-host: ${KNOWLEDGE_WIKI_PROXY_HOST:}
+      proxy-port: ${KNOWLEDGE_WIKI_PROXY_PORT:0}
+    graph:
+      neo4j:
+        enabled: ${KNOWLEDGE_NEO4J_ENABLED:false}
+        uri: ${KNOWLEDGE_NEO4J_URI:bolt://localhost:7687}
+        username: ${KNOWLEDGE_NEO4J_USERNAME:neo4j}
+        password: ${KNOWLEDGE_NEO4J_PASSWORD:}
+        database: ${KNOWLEDGE_NEO4J_DATABASE:neo4j}
+        max-hops: 2
+        max-results: 50
+        extraction-endpoint: ${KNOWLEDGE_GRAPH_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+        extraction-api-key: ${ZHIPU_API_KEY:}
+        extraction-model: ${KNOWLEDGE_GRAPH_MODEL:glm-4.5-flash}
+        extraction-timeout: 90s
+        extraction-max-attempts: 2
+        extraction-initial-backoff: 300ms
+        extraction-max-input-characters: 120000
+        extraction-max-output-tokens: 8192
+        proxy-host: ${KNOWLEDGE_GRAPH_PROXY_HOST:}
+        proxy-port: ${KNOWLEDGE_GRAPH_PROXY_PORT:0}
     connectors:
       obsidian:
         allowed-roots: ${KNOWLEDGE_OBSIDIAN_ALLOWED_ROOTS:}
-        batch-size: 100
+        batch-size: ${KNOWLEDGE_OBSIDIAN_BATCH_SIZE:25}
         max-file-bytes: 2097152
-    indexing:
-      batch-size: 8
-      poll-interval: 1s
+    async:
       lease-duration: 2m
+      recovery-interval: 30s
+      initial-delay: 10s
+      recovery-batch-size: 2
+    indexing:
+      batch-size: 1
+      poll-interval: 1s
+      lease-duration: 5m
       max-attempts: 5
       initial-backoff: 2s
       max-backoff: 5m
@@ -71,7 +145,7 @@ infinity:
       provider: zhipu
       model: embedding-3
       dimensions: 2048
-      generation: ${KNOWLEDGE_EMBEDDING_GENERATION:v1}
+      generation: ${KNOWLEDGE_EMBEDDING_GENERATION:v2}
       endpoint: https://open.bigmodel.cn/api/paas/v4/embeddings
       api-key: ${ZHIPU_API_KEY:}
       request-timeout: 30s

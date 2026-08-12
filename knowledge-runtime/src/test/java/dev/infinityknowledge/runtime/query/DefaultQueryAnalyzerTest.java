@@ -29,6 +29,21 @@ class DefaultQueryAnalyzerTest {
         assertEquals(25, plan.candidateLimit());
     }
 
+    @Test
+    void plansPublishedPagesAlongsideKeywordEvidence() {
+        DefaultQueryAnalyzer analyzer = new DefaultQueryAnalyzer(
+                5,
+                Set.of(RetrievalChannel.KEYWORD, RetrievalChannel.PAGE)
+        );
+
+        var plan = analyzer.analyze(query("订单服务如何排查"));
+
+        assertEquals(
+                Set.of(RetrievalChannel.KEYWORD, RetrievalChannel.PAGE),
+                plan.channels()
+        );
+    }
+
     private static KnowledgeQuery query(String text) {
         return new KnowledgeQuery(
                 UUID.randomUUID(),

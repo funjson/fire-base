@@ -72,7 +72,7 @@ Postgres   ES     Milvus   Connector Provider
 | A-006 | 投影租约无续期/提交围栏 | `OPEN` | 仍需 heartbeat/fencing token；同修订元数据在 Job RUNNING 期间变化时也可能漏掉重投影，当前仅有发布前活动修订保护 |
 | A-007 | Generation 原子发布停留在设计 | `OPEN` | 当前以活动修订守卫和可重建投影保证正确性，未实现全索引 Alias 原子切换 |
 | A-008 | Adapter 后启无历史回填 | `PARTIAL` | 已有按空间 rebuild API/UI；缺少自动扫描、进度和调度 |
-| A-009 | 跨通道 Filter 语义不一致 | `PARTIAL` | HTTP 只允许 `language`/`sourceType`，PG/ES 执行；Milvus 明确拒绝并降级，不再静默放宽 |
+| A-009 | 跨通道 Filter 语义不一致 | `RESOLVED` | HTTP 只允许 `language`/`sourceType`；PG、ES、Milvus 均执行精确匹配，Milvus 使用独立 metadata-v2 collection schema |
 | A-010 | Control Plane 越过 Port 直接持久化 | `RESOLVED` | 四个用例 Store Port；Application Service 无 SQL/JDBC |
 | A-011 | Connector SPI 被具体实现绕过 | `RESOLVED` | `SourceConnectorProvider` + Map 选择，无额外 Registry 框架 |
 | A-012 | 检索无端到端 Deadline/取消/熔断 | `OPEN` | 有有界线程池/通道超时，尚无统一 Deadline、取消传播和熔断 |

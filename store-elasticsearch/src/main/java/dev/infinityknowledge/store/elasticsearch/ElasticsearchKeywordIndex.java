@@ -6,6 +6,7 @@ import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.keyword.KeywordIndex;
+import dev.infinityknowledge.spi.indexing.ActiveRevisionCandidates;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import dev.infinityknowledge.spi.indexing.ProjectionSource;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
@@ -200,8 +201,20 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
         optionalTerm(request.query().filters(), filters, "sourceType", "source_type");
         optionalTerm(request.query().filters(), filters, "language", "language");
         bool.put("filter", filters);
+        return ActiveRevisionCandidates.load(
+                request.accessScope().tenantId(),
+                request.plan().candidateLimit(),
+                limit -> search(bool, limit),
+                activeRevisionGuard
+        );
+    }
+
+    private List<RetrievalCandidate> search(
+            Map<String, Object> bool,
+            int limit
+    ) {
         Map<String, Object> body = Map.of(
-                "size", request.plan().candidateLimit(),
+                "size", limit,
                 "track_total_hits", false,
                 "_source", List.of(
                         "tenant_id", "space_id", "document_id", "revision_id",
@@ -245,10 +258,7 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
                     )
             ));
         }
-        return activeRevisionGuard.retainActive(
-                request.accessScope().tenantId(),
-                candidates
-        );
+        return List.copyOf(candidates);
     }
 
     private void ensureIndex() {

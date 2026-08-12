@@ -19,6 +19,7 @@ import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.indexing.ActiveRevisionCandidates;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import dev.infinityknowledge.spi.vector.VectorIndex;
 import dev.infinityknowledge.spi.vector.VectorIndexRecord;
@@ -37,6 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MilvusVectorIndex implements VectorIndex {
 
+    private static final String SCHEMA_GENERATION = "metadata_v2";
     private static final String ID = "id";
     private static final String TENANT_ID = "tenant_id";
     private static final String SPACE_ID = "space_id";
@@ -44,6 +46,8 @@ public final class MilvusVectorIndex implements VectorIndex {
     private static final String REVISION_ID = "revision_id";
     private static final String TITLE = "title";
     private static final String SOURCE_URI = "source_uri";
+    private static final String SOURCE_TYPE = "source_type";
+    private static final String LANGUAGE = "language";
     private static final String SECTION_PATH = "section_path";
     private static final String CONTENT = "content";
     private static final String AUTHORITY = "authority";
@@ -55,6 +59,8 @@ public final class MilvusVectorIndex implements VectorIndex {
             REVISION_ID,
             TITLE,
             SOURCE_URI,
+            SOURCE_TYPE,
+            LANGUAGE,
             SECTION_PATH,
             CONTENT,
             AUTHORITY
@@ -142,11 +148,20 @@ public final class MilvusVectorIndex implements VectorIndex {
             return List.of();
         }
         ensureGeneration(request.embeddingSpec(), request.generation());
+        return ActiveRevisionCandidates.load(
+                request.accessScope().tenantId(),
+                request.limit(),
+                limit -> search(request, limit),
+                activeRevisionGuard
+        );
+    }
+
+    private List<RetrievalCandidate> search(VectorSearchRequest request, int limit) {
         SearchReq search = SearchReq.builder()
                 .collectionName(collectionName(request.embeddingSpec(), request.generation()))
                 .annsField(VECTOR)
                 .metricType(IndexParam.MetricType.COSINE)
-                .limit(request.limit())
+                .limit(limit)
                 .filter(filter(request))
                 .filterTemplateValues(filterValues(request))
                 .outputFields(OUTPUT_FIELDS)
@@ -162,10 +177,7 @@ public final class MilvusVectorIndex implements VectorIndex {
         for (int index = 0; index < results.size(); index++) {
             candidates.add(toCandidate(results.get(index), index + 1));
         }
-        return activeRevisionGuard.retainActive(
-                request.accessScope().tenantId(),
-                candidates
-        );
+        return List.copyOf(candidates);
     }
 
     private void createCollection(String collectionName, int dimensions) {
@@ -178,6 +190,8 @@ public final class MilvusVectorIndex implements VectorIndex {
         schema.addField(field(REVISION_ID, DataType.VarChar, 36, false, false));
         schema.addField(field(TITLE, DataType.VarChar, 512, false, false));
         schema.addField(field(SOURCE_URI, DataType.VarChar, 2_048, false, false));
+        schema.addField(field(SOURCE_TYPE, DataType.VarChar, 32, false, false));
+        schema.addField(field(LANGUAGE, DataType.VarChar, 32, false, false));
         schema.addField(field(SECTION_PATH, DataType.VarChar, 4_096, false, false));
         schema.addField(field(CONTENT, DataType.VarChar, 65_535, false, false));
         schema.addField(AddFieldReq.builder()
@@ -242,6 +256,8 @@ public final class MilvusVectorIndex implements VectorIndex {
         row.addProperty(REVISION_ID, chunk.revisionId().toString());
         row.addProperty(TITLE, record.title());
         row.addProperty(SOURCE_URI, record.sourceUri());
+        row.addProperty(SOURCE_TYPE, record.sourceType());
+        row.addProperty(LANGUAGE, record.language());
         JsonArray path = new JsonArray();
         chunk.sectionPath().forEach(path::add);
         row.addProperty(SECTION_PATH, path.toString());
@@ -253,14 +269,33 @@ public final class MilvusVectorIndex implements VectorIndex {
         return row;
     }
 
-    private static String filter(VectorSearchRequest request) {
-        String base = TENANT_ID + " == {tenantId} && " + SPACE_ID + " in {spaceIds}";
-        return request.accessScope().restrictsDocuments()
-                ? base + " && " + DOCUMENT_ID + " in {documentIds}"
-                : base;
+    static String filter(VectorSearchRequest request) {
+        StringBuilder expression = new StringBuilder()
+                .append(TENANT_ID)
+                .append(" == {tenantId} && ")
+                .append(SPACE_ID)
+                .append(" in {spaceIds}");
+        if (request.accessScope().restrictsDocuments()) {
+            expression.append(" && ")
+                    .append(DOCUMENT_ID)
+                    .append(" in {documentIds}");
+        }
+        appendOptionalFilter(
+                expression,
+                request.filters(),
+                "sourceType",
+                SOURCE_TYPE
+        );
+        appendOptionalFilter(
+                expression,
+                request.filters(),
+                "language",
+                LANGUAGE
+        );
+        return expression.toString();
     }
 
-    private static Map<String, Object> filterValues(VectorSearchRequest request) {
+    static Map<String, Object> filterValues(VectorSearchRequest request) {
         Map<String, Object> values = new java.util.HashMap<>();
         values.put("tenantId", request.accessScope().tenantId().value());
         values.put(
@@ -272,7 +307,35 @@ public final class MilvusVectorIndex implements VectorIndex {
         if (request.accessScope().restrictsDocuments()) {
             values.put("documentIds", List.copyOf(request.accessScope().documentIds()));
         }
+        optionalFilterValue(values, request.filters(), "sourceType");
+        optionalFilterValue(values, request.filters(), "language");
         return Map.copyOf(values);
+    }
+
+    private static void appendOptionalFilter(
+            StringBuilder expression,
+            Map<String, String> filters,
+            String parameter,
+            String field
+    ) {
+        if (filters.containsKey(parameter)) {
+            expression.append(" && ")
+                    .append(field)
+                    .append(" == {")
+                    .append(parameter)
+                    .append('}');
+        }
+    }
+
+    private static void optionalFilterValue(
+            Map<String, Object> values,
+            Map<String, String> filters,
+            String name
+    ) {
+        String value = filters.get(name);
+        if (value != null) {
+            values.put(name, value.strip());
+        }
     }
 
     private static RetrievalCandidate toCandidate(
@@ -295,7 +358,9 @@ public final class MilvusVectorIndex implements VectorIndex {
                 requiredString(entity, SOURCE_URI),
                 Map.of(
                         "retriever", "milvus-2.6",
-                        "authority", requiredString(entity, AUTHORITY)
+                        "authority", requiredString(entity, AUTHORITY),
+                        "sourceType", requiredString(entity, SOURCE_TYPE),
+                        "language", requiredString(entity, LANGUAGE)
                 )
         );
     }
@@ -344,7 +409,8 @@ public final class MilvusVectorIndex implements VectorIndex {
                 safeIdentifier(spec.providerId(), "providerId"),
                 safeIdentifier(spec.modelId(), "modelId"),
                 Integer.toString(spec.dimensions()),
-                safeIdentifier(generation, "generation")
+                safeIdentifier(generation, "generation"),
+                SCHEMA_GENERATION
         );
     }
 

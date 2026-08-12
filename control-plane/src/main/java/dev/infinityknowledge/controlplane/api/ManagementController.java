@@ -61,6 +61,23 @@ public final class ManagementController {
         return management.chunks(principals.create(jwt), documentId);
     }
 
+    @GetMapping("/documents/{documentId}/revisions")
+    public List<ManagementViews.Revision> revisions(
+            @PathVariable UUID documentId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return management.revisions(principals.create(jwt), documentId);
+    }
+
+    @GetMapping("/documents/{documentId}/revisions/{revisionId}/chunks")
+    public List<ManagementViews.Chunk> revisionChunks(
+            @PathVariable UUID documentId,
+            @PathVariable UUID revisionId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return management.chunks(principals.create(jwt), documentId, revisionId);
+    }
+
     @GetMapping("/connectors")
     public List<ManagementViews.Connector> connectors(@AuthenticationPrincipal Jwt jwt) {
         return management.connectors(principals.create(jwt));

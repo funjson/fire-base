@@ -1,11 +1,13 @@
 package dev.infinityknowledge.controlplane.config;
 
+import dev.infinityknowledge.store.postgres.PostgresKnowledgeGovernanceStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.io.ClassPathResource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -56,6 +58,13 @@ class RuntimeConfigurationContractTest {
         assertThat(source.getProperty(
                 "spring.security.oauth2.resourceserver.jwt.audiences[0]"
         )).isEqualTo("${OIDC_AUDIENCE:infinity-knowledge-api}");
+        assertThat(source.getProperty("spring.task.scheduling.pool.size"))
+                .isEqualTo("${KNOWLEDGE_SCHEDULER_POOL_SIZE:3}");
+        assertThat(source.getProperty(
+                "infinity.knowledge.connectors.obsidian.batch-size"
+        )).isEqualTo("${KNOWLEDGE_OBSIDIAN_BATCH_SIZE:25}");
+        assertThat(source.getProperty("infinity.knowledge.async.lease-duration"))
+                .isEqualTo("2m");
     }
 
     @Test
@@ -156,7 +165,16 @@ class RuntimeConfigurationContractTest {
                         "set-password",
                         "ensure_realm_role",
                         "remove_realm_role"
-                );
+                )
+                .contains("--merge")
+                .doesNotContain("awk");
+    }
+
+    @Test
+    void transactionalGovernanceAdapterRemainsProxyable() {
+        assertThat(Modifier.isFinal(
+                PostgresKnowledgeGovernanceStore.class.getModifiers()
+        )).isFalse();
     }
 
     private static void assertRequiredMappers(JsonNode client) {
@@ -180,7 +198,7 @@ class RuntimeConfigurationContractTest {
         assertThat(mapper.path("config")
                 .path("included.client.audience").asString())
                 .isEqualTo("infinity-knowledge-api");
-        assertThat(mapper.path("config").path("access.token.claim").asText())
+        assertThat(mapper.path("config").path("access.token.claim").asString())
                 .isEqualTo("true");
     }
 

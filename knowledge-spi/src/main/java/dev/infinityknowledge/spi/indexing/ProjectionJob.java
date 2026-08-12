@@ -17,6 +17,7 @@ import java.util.UUID;
  * @param revisionId immutable source revision
  * @param projectionType target projection
  * @param attempt current one-based delivery attempt
+ * @param leaseToken monotonic fencing token for the current claim
  */
 public record ProjectionJob(
         UUID id,
@@ -25,7 +26,8 @@ public record ProjectionJob(
         DocumentId documentId,
         UUID revisionId,
         ProjectionType projectionType,
-        int attempt
+        int attempt,
+        long leaseToken
 ) {
 
     /**
@@ -40,6 +42,9 @@ public record ProjectionJob(
         Objects.requireNonNull(projectionType, "projectionType must not be null");
         if (attempt < 1) {
             throw new IllegalArgumentException("attempt must be positive");
+        }
+        if (leaseToken < 1) {
+            throw new IllegalArgumentException("leaseToken must be positive");
         }
     }
 }

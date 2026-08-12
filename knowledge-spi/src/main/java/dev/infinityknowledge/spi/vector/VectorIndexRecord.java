@@ -13,6 +13,8 @@ import java.util.Objects;
  * @param chunk source chunk
  * @param title current document title
  * @param sourceUri traceable source URI
+ * @param sourceType normalized source type used by cross-channel filtering
+ * @param language normalized BCP 47 language tag
  * @param authority document authority level
  * @param embeddingSpec embedding model contract
  * @param generation immutable index generation
@@ -22,6 +24,8 @@ public record VectorIndexRecord(
         KnowledgeChunk chunk,
         String title,
         String sourceUri,
+        String sourceType,
+        String language,
         int authority,
         EmbeddingSpec embeddingSpec,
         String generation,
@@ -35,6 +39,8 @@ public record VectorIndexRecord(
         Objects.requireNonNull(chunk, "chunk must not be null");
         title = DomainChecks.requiredText(title, "title", 512);
         sourceUri = DomainChecks.requiredText(sourceUri, "sourceUri", 2048);
+        sourceType = DomainChecks.requiredText(sourceType, "sourceType", 32);
+        language = DomainChecks.requiredText(language, "language", 32);
         if (authority < 0 || authority > 100) {
             throw new IllegalArgumentException("authority must be between 0 and 100");
         }

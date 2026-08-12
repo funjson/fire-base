@@ -2,13 +2,16 @@ import {
   Activity,
   Blocks,
   BookOpen,
+  BookOpenCheck,
   Cable,
   ChevronRight,
   Database,
   FlaskConical,
   Gauge,
   LogOut,
+  Network,
   Search,
+  ShieldCheck,
 } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth-context'
@@ -17,6 +20,8 @@ const navigation = [
   { to: '/', label: '运行总览', icon: Gauge, adminOnly: true },
   { to: '/spaces', label: '知识空间', icon: Blocks, adminOnly: true },
   { to: '/documents', label: '文档管理', icon: BookOpen, adminOnly: true },
+  { to: '/wiki', label: '知识页', icon: BookOpenCheck, adminOnly: true },
+  { to: '/graph', label: '知识图谱', icon: Network, adminOnly: true },
   { to: '/retrieval', label: '检索实验室', icon: Search, adminOnly: false },
   {
     to: '/evaluations',
@@ -26,6 +31,7 @@ const navigation = [
   },
   { to: '/connectors', label: '数据连接器', icon: Cable, adminOnly: true },
   { to: '/traces', label: '检索追踪', icon: Activity, adminOnly: true },
+  { to: '/audit-events', label: '操作审计', icon: ShieldCheck, adminOnly: true },
 ]
 
 export function Layout() {

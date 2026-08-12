@@ -85,13 +85,17 @@ public final class PostgresProjectionJobQueue
                 UPDATE projection_job AS job
                 SET status = 'RUNNING',
                     attempt_count = attempt_count + 1,
+                    lease_token = lease_token + 1,
+                    requeue_requested = FALSE,
                     lease_owner = ?,
                     lease_until = ?,
+                    completed_at = NULL,
                     updated_at = ?
                 FROM candidates
                 WHERE job.id = candidates.id
                 RETURNING job.id, job.tenant_id, job.space_id, job.document_id,
-                          job.revision_id, job.projection_type, job.attempt_count
+                          job.revision_id, job.projection_type, job.attempt_count,
+                          job.lease_token
                 """.formatted(typeLiterals),
                 (resultSet, rowNumber) -> new ProjectionJob(
                         resultSet.getObject("id", UUID.class),
@@ -100,7 +104,8 @@ public final class PostgresProjectionJobQueue
                         new DocumentId(resultSet.getObject("document_id", UUID.class)),
                         resultSet.getObject("revision_id", UUID.class),
                         ProjectionType.valueOf(resultSet.getString("projection_type")),
-                        resultSet.getInt("attempt_count")
+                        resultSet.getInt("attempt_count"),
+                        resultSet.getLong("lease_token")
                 ),
                 now.atOffset(ZoneOffset.UTC),
                 now.atOffset(ZoneOffset.UTC),
@@ -113,31 +118,94 @@ public final class PostgresProjectionJobQueue
     }
 
     @Override
-    public void complete(UUID jobId, String workerId, Instant now) {
+    public boolean complete(
+            UUID jobId,
+            String workerId,
+            long leaseToken,
+            Instant now
+    ) {
         Objects.requireNonNull(jobId, "jobId must not be null");
         workerId = requiredWorker(workerId);
+        requireLeaseToken(leaseToken);
         Objects.requireNonNull(now, "now must not be null");
-        int updated = jdbc.update("""
+        return jdbc.update("""
                 UPDATE projection_job
-                SET status = 'SUCCEEDED',
+                SET status = CASE
+                        WHEN requeue_requested THEN 'PENDING'
+                        ELSE 'SUCCEEDED'
+                    END,
+                    attempt_count = CASE
+                        WHEN requeue_requested THEN 0
+                        ELSE attempt_count
+                    END,
+                    available_at = CASE
+                        WHEN requeue_requested THEN ?
+                        ELSE available_at
+                    END,
                     lease_owner = NULL,
                     lease_until = NULL,
-                    completed_at = ?,
+                    completed_at = CASE
+                        WHEN requeue_requested THEN NULL
+                        ELSE ?
+                    END,
+                    last_error_code = NULL,
+                    requeue_requested = FALSE,
                     updated_at = ?
-                WHERE id = ? AND status = 'RUNNING' AND lease_owner = ?
+                WHERE id = ?
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                  AND lease_token = ?
+                  AND lease_until >= ?
                 """,
                 now.atOffset(ZoneOffset.UTC),
                 now.atOffset(ZoneOffset.UTC),
+                now.atOffset(ZoneOffset.UTC),
                 jobId,
-                workerId
-        );
-        requireLease(updated);
+                workerId,
+                leaseToken,
+                now.atOffset(ZoneOffset.UTC)
+        ) == 1;
     }
 
     @Override
-    public void fail(
+    public boolean heartbeat(
             UUID jobId,
             String workerId,
+            long leaseToken,
+            Instant leaseUntil,
+            Instant now
+    ) {
+        Objects.requireNonNull(jobId, "jobId must not be null");
+        workerId = requiredWorker(workerId);
+        requireLeaseToken(leaseToken);
+        Objects.requireNonNull(leaseUntil, "leaseUntil must not be null");
+        Objects.requireNonNull(now, "now must not be null");
+        if (!leaseUntil.isAfter(now)) {
+            throw new IllegalArgumentException("leaseUntil must be after now");
+        }
+        return jdbc.update("""
+                UPDATE projection_job
+                   SET lease_until = ?, updated_at = ?
+                 WHERE id = ?
+                   AND status = 'RUNNING'
+                   AND lease_owner = ?
+                   AND lease_token = ?
+                   AND lease_until >= ?
+                """,
+                leaseUntil.atOffset(ZoneOffset.UTC),
+                now.atOffset(ZoneOffset.UTC),
+                jobId,
+                workerId,
+                leaseToken,
+                now.atOffset(ZoneOffset.UTC)
+        ) == 1;
+    }
+
+    @Override
+    public boolean fail(
+            UUID jobId,
+            String workerId,
+            long leaseToken,
             String errorCode,
             Instant availableAt,
             boolean dead,
@@ -145,27 +213,49 @@ public final class PostgresProjectionJobQueue
     ) {
         Objects.requireNonNull(jobId, "jobId must not be null");
         workerId = requiredWorker(workerId);
+        requireLeaseToken(leaseToken);
         errorCode = requiredErrorCode(errorCode);
         Objects.requireNonNull(availableAt, "availableAt must not be null");
         Objects.requireNonNull(now, "now must not be null");
-        int updated = jdbc.update("""
+        return jdbc.update("""
                 UPDATE projection_job
-                SET status = ?,
+                SET status = CASE
+                        WHEN requeue_requested THEN 'PENDING'
+                        ELSE ?
+                    END,
+                    attempt_count = CASE
+                        WHEN requeue_requested THEN 0
+                        ELSE attempt_count
+                    END,
                     lease_owner = NULL,
                     lease_until = NULL,
-                    available_at = ?,
-                    last_error_code = ?,
+                    available_at = CASE
+                        WHEN requeue_requested THEN ?
+                        ELSE ?
+                    END,
+                    last_error_code = CASE
+                        WHEN requeue_requested THEN NULL
+                        ELSE ?
+                    END,
+                    completed_at = NULL,
+                    requeue_requested = FALSE,
                     updated_at = ?
-                WHERE id = ? AND status = 'RUNNING' AND lease_owner = ?
+                WHERE id = ?
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                  AND lease_token = ?
+                  AND lease_until >= ?
                 """,
                 dead ? "DEAD" : "RETRY",
+                now.atOffset(ZoneOffset.UTC),
                 availableAt.atOffset(ZoneOffset.UTC),
                 errorCode,
                 now.atOffset(ZoneOffset.UTC),
                 jobId,
-                workerId
-        );
-        requireLease(updated);
+                workerId,
+                leaseToken,
+                now.atOffset(ZoneOffset.UTC)
+        ) == 1;
     }
 
     @Override
@@ -223,6 +313,7 @@ public final class PostgresProjectionJobQueue
                 SET status = 'RETRY',
                     attempt_count = 0,
                     available_at = ?,
+                    requeue_requested = FALSE,
                     last_error_code = NULL,
                     completed_at = NULL,
                     updated_at = ?
@@ -295,15 +386,44 @@ public final class PostgresProjectionJobQueue
                             VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)
                             ON CONFLICT (tenant_id, revision_id, projection_type)
                             DO UPDATE SET
-                                status = 'PENDING',
-                                attempt_count = 0,
-                                available_at = EXCLUDED.available_at,
-                                lease_owner = NULL,
-                                lease_until = NULL,
-                                last_error_code = NULL,
-                                completed_at = NULL,
+                                status = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.status
+                                    ELSE 'PENDING'
+                                END,
+                                attempt_count = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.attempt_count
+                                    ELSE 0
+                                END,
+                                available_at = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.available_at
+                                    ELSE EXCLUDED.available_at
+                                END,
+                                lease_owner = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.lease_owner
+                                    ELSE NULL
+                                END,
+                                lease_until = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.lease_until
+                                    ELSE NULL
+                                END,
+                                requeue_requested = projection_job.status = 'RUNNING',
+                                last_error_code = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.last_error_code
+                                    ELSE NULL
+                                END,
+                                completed_at = CASE
+                                    WHEN projection_job.status = 'RUNNING'
+                                        THEN projection_job.completed_at
+                                    ELSE NULL
+                                END,
                                 updated_at = EXCLUDED.updated_at
-                            WHERE projection_job.status <> 'RUNNING'
+                            WHERE projection_job.status IN ('RUNNING', 'SUCCEEDED', 'DEAD')
                             """,
                             UUID.randomUUID(),
                             tenantId.value(),
@@ -340,9 +460,9 @@ public final class PostgresProjectionJobQueue
         return value;
     }
 
-    private static void requireLease(int updated) {
-        if (updated != 1) {
-            throw new IllegalStateException("projection job lease is no longer owned by worker");
+    private static void requireLeaseToken(long leaseToken) {
+        if (leaseToken < 1) {
+            throw new IllegalArgumentException("leaseToken must be positive");
         }
     }
 

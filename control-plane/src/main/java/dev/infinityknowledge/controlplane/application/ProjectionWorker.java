@@ -101,31 +101,63 @@ public final class ProjectionWorker {
                     job.documentId(),
                     job.revisionId()
             )) {
-                queue.complete(job.id(), workerId, clock.instant());
+                boolean accepted = queue.complete(
+                        job.id(),
+                        workerId,
+                        job.leaseToken(),
+                        clock.instant()
+                );
                 LOGGER.debug(
                         "Superseded projection skipped: jobId={}, tenantId={}, "
-                                + "documentId={}, revisionId={}, type={}",
+                                + "documentId={}, revisionId={}, type={}, leaseAccepted={}",
                         job.id(),
                         job.tenantId().value(),
                         job.documentId().value(),
                         job.revisionId(),
-                        job.projectionType().name()
+                        job.projectionType().name(),
+                        accepted
                 );
                 return;
             }
             var source = sourceStore.load(job);
+            Instant heartbeatAt = clock.instant();
+            if (!queue.heartbeat(
+                    job.id(),
+                    workerId,
+                    job.leaseToken(),
+                    heartbeatAt.plus(properties.leaseDuration()),
+                    heartbeatAt
+            )) {
+                LOGGER.debug(
+                        "Projection lease lost before publish: jobId={}, tenantId={}, "
+                                + "documentId={}, type={}, leaseToken={}",
+                        job.id(),
+                        job.tenantId().value(),
+                        job.documentId().value(),
+                        job.projectionType().name(),
+                        job.leaseToken()
+                );
+                return;
+            }
             ProjectionExecutor executor = executors.get(job.projectionType());
             if (executor == null) {
                 throw new IllegalStateException("worker received unsupported projection type");
             }
             executor.project(source);
-            queue.complete(job.id(), workerId, clock.instant());
+            boolean accepted = queue.complete(
+                    job.id(),
+                    workerId,
+                    job.leaseToken(),
+                    clock.instant()
+            );
             LOGGER.debug(
-                    "Projection completed: jobId={}, tenantId={}, documentId={}, type={}",
+                    "Projection attempt finished: jobId={}, tenantId={}, documentId={}, "
+                            + "type={}, leaseAccepted={}",
                     job.id(),
                     job.tenantId().value(),
                     job.documentId().value(),
-                    job.projectionType().name()
+                    job.projectionType().name(),
+                    accepted
             );
         } catch (RuntimeException projectionFailure) {
             Instant now = clock.instant();
@@ -133,34 +165,43 @@ public final class ProjectionWorker {
             if (dead) {
                 LOGGER.error(
                         "Projection failed: jobId={}, tenantId={}, documentId={}, type={}, "
-                                + "attempt={}, deadLetter=true",
+                                + "attempt={}, deadLetter=true, failureType={}",
                         job.id(),
                         job.tenantId().value(),
                         job.documentId().value(),
                         job.projectionType().name(),
                         job.attempt(),
-                        projectionFailure
+                        projectionFailure.getClass().getSimpleName()
                 );
             } else {
                 LOGGER.warn(
                         "Projection failed: jobId={}, tenantId={}, documentId={}, type={}, "
-                                + "attempt={}, deadLetter=false",
+                                + "attempt={}, deadLetter=false, failureType={}",
                         job.id(),
                         job.tenantId().value(),
                         job.documentId().value(),
                         job.projectionType().name(),
                         job.attempt(),
-                        projectionFailure
+                        projectionFailure.getClass().getSimpleName()
                 );
             }
-            queue.fail(
+            boolean accepted = queue.fail(
                     job.id(),
                     workerId,
+                    job.leaseToken(),
                     job.projectionType().name() + "_PROJECTION_FAILED",
                     dead ? now : now.plus(backoff(job.attempt())),
                     dead,
                     now
             );
+            if (!accepted) {
+                LOGGER.debug(
+                        "Projection failure ignored after lease loss: jobId={}, "
+                                + "leaseToken={}",
+                        job.id(),
+                        job.leaseToken()
+                );
+            }
         }
     }
 

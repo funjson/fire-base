@@ -73,6 +73,8 @@ public final class DefaultVectorProjectionService implements VectorProjectionSer
                     chunk,
                     document.title(),
                     document.source().uri(),
+                    document.source().type().name(),
+                    language(document, chunk),
                     document.authority(),
                     embeddingSpec,
                     generation,
@@ -84,5 +86,16 @@ public final class DefaultVectorProjectionService implements VectorProjectionSer
             return;
         }
         vectorIndex.upsert(records);
+    }
+
+    private static String language(
+            KnowledgeDocument document,
+            KnowledgeChunk chunk
+    ) {
+        String language = document.metadata().get("language");
+        if (language == null || language.isBlank()) {
+            language = chunk.metadata().get("language");
+        }
+        return language == null || language.isBlank() ? "und" : language.strip();
     }
 }

@@ -11,6 +11,7 @@ import dev.infinityknowledge.ingestion.MarkdownElementParser;
 import dev.infinityknowledge.evaluation.EvaluationStore;
 import dev.infinityknowledge.spi.KnowledgeGateway;
 import dev.infinityknowledge.spi.access.AccessPolicy;
+import dev.infinityknowledge.spi.audit.AuditStore;
 import dev.infinityknowledge.spi.connector.ConnectorStateStore;
 import dev.infinityknowledge.spi.connector.SourceConnectorProvider;
 import dev.infinityknowledge.spi.indexing.IndexProjectionStore;
@@ -20,13 +21,17 @@ import dev.infinityknowledge.spi.indexing.ProjectionJobQueue;
 import dev.infinityknowledge.spi.indexing.ProjectionSourceStore;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
 import dev.infinityknowledge.spi.retrieval.Retriever;
+import dev.infinityknowledge.spi.retrieval.Reranker;
 import dev.infinityknowledge.spi.ingestion.KnowledgeCatalog;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriter;
 import dev.infinityknowledge.spi.governance.KnowledgeGovernanceStore;
 import dev.infinityknowledge.spi.management.KnowledgeAdministrationStore;
 import dev.infinityknowledge.spi.trace.TraceSink;
+import dev.infinityknowledge.controlplane.observability.MeteredTraceSink;
+import io.micrometer.core.instrument.MeterRegistry;
 import dev.infinityknowledge.store.postgres.PostgresAccessPolicy;
 import dev.infinityknowledge.store.postgres.PostgresActiveRevisionGuard;
+import dev.infinityknowledge.store.postgres.PostgresAuditStore;
 import dev.infinityknowledge.store.postgres.PostgresConnectorStateStore;
 import dev.infinityknowledge.store.postgres.PostgresEvaluationStore;
 import dev.infinityknowledge.store.postgres.PostgresIndexProjectionStore;
@@ -51,6 +56,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.util.List;
 import java.util.EnumSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -88,7 +94,7 @@ public class KnowledgeRuntimeConfiguration {
                 TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(properties.queueCapacity()),
                 Thread.ofPlatform().name("knowledge-retrieval-", 0).factory(),
-                new ThreadPoolExecutor.CallerRunsPolicy()
+                new ThreadPoolExecutor.AbortPolicy()
         );
     }
 
@@ -199,9 +205,16 @@ public class KnowledgeRuntimeConfiguration {
     @Bean
     TraceSink traceSink(
             JdbcTemplate jdbc,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            MeterRegistry meterRegistry
     ) {
-        return new PostgresTraceSink(jdbc, new TransactionTemplate(transactionManager));
+        return new MeteredTraceSink(
+                new PostgresTraceSink(
+                        jdbc,
+                        new TransactionTemplate(transactionManager)
+                ),
+                meterRegistry
+        );
     }
 
     /**
@@ -213,6 +226,12 @@ public class KnowledgeRuntimeConfiguration {
     @Bean
     KnowledgeAdministrationStore knowledgeAdministrationStore(JdbcTemplate jdbc) {
         return new PostgresKnowledgeAdministrationStore(jdbc);
+    }
+
+    /** Registers durable, tenant-bound mutation audit persistence. */
+    @Bean
+    AuditStore auditStore(JdbcTemplate jdbc) {
+        return new PostgresAuditStore(jdbc);
     }
 
     /**
@@ -282,16 +301,13 @@ public class KnowledgeRuntimeConfiguration {
     KnowledgeWriter knowledgeWriter(
             JdbcTemplate jdbc,
             PlatformTransactionManager transactionManager,
-            VectorProperties vectorProperties,
-            ElasticsearchProperties elasticsearchProperties
+            List<ProjectionExecutor> projectionExecutors
     ) {
-        Set<ProjectionType> projections = EnumSet.noneOf(ProjectionType.class);
-        if (vectorProperties.enabled()) {
-            projections.add(ProjectionType.VECTOR);
-        }
-        if (elasticsearchProperties.enabled()) {
-            projections.add(ProjectionType.KEYWORD);
-        }
+        Set<ProjectionType> projections = projectionExecutors.stream()
+                .map(ProjectionExecutor::projectionType)
+                .collect(java.util.stream.Collectors.toCollection(
+                        () -> EnumSet.noneOf(ProjectionType.class)
+                ));
         return new PostgresKnowledgeWriter(
                 jdbc,
                 new TransactionTemplate(transactionManager),
@@ -382,6 +398,7 @@ public class KnowledgeRuntimeConfiguration {
             AccessPolicy accessPolicy,
             ActiveRevisionGuard activeRevisionGuard,
             List<Retriever> retrievers,
+            Optional<Reranker> reranker,
             TraceSink traceSink,
             @Qualifier("retrievalExecutor") ExecutorService executor,
             Clock clock,
@@ -398,11 +415,14 @@ public class KnowledgeRuntimeConfiguration {
                 ),
                 retrievers,
                 new ReciprocalRankFusion(properties.rrfConstant()),
+                reranker.orElseGet(Reranker::passthrough),
                 new DefaultEvidenceBuilder(),
                 traceSink,
                 executor,
                 clock,
-                properties.sufficientThreshold()
+                properties.sufficientThreshold(),
+                properties.requestTimeout(),
+                properties.channelTimeout()
         );
     }
 }

@@ -74,6 +74,24 @@ export function RetrievalPage() {
                 required
               />
             </label>
+            <div className="form-grid">
+              <label>
+                语言（BCP 47）
+                <input name="language" placeholder="例如 zh-CN" maxLength={32} />
+              </label>
+              <label>
+                来源类型
+                <select name="sourceType" defaultValue="">
+                  <option value="">全部来源</option>
+                  <option value="API">Markdown API</option>
+                  <option value="UPLOAD">文件上传</option>
+                  <option value="OBSIDIAN">Obsidian</option>
+                  <option value="FILESYSTEM">文件系统</option>
+                  <option value="GIT">Git</option>
+                  <option value="COMPILED">编译知识</option>
+                </select>
+              </label>
+            </div>
             <button
               className="primary-button"
               disabled={query.isPending || !selectedSpaces.length}
@@ -188,10 +206,15 @@ function submit(
 ) {
   event.preventDefault()
   const form = new FormData(event.currentTarget)
+  const filters = Object.fromEntries(
+    ['language', 'sourceType']
+      .map((name) => [name, String(form.get(name) ?? '').trim()] as const)
+      .filter(([, value]) => value.length > 0),
+  )
   mutate({
     query: String(form.get('query')).trim(),
     spaceIds,
     topK: Number(form.get('topK') ?? 8),
-    filters: {},
+    filters,
   })
 }

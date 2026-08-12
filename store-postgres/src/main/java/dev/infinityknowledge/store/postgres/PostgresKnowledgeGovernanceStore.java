@@ -21,8 +21,10 @@ import java.util.Set;
 
 /**
  * 使用 PostgreSQL 实现知识空间、主体和 ACL 治理。
+ *
+ * <p>该类需要保持可继承，以便 Spring 默认的类代理应用下方方法级事务边界。</p>
  */
-public final class PostgresKnowledgeGovernanceStore
+public class PostgresKnowledgeGovernanceStore
         implements KnowledgeGovernanceStore {
 
     private final NamedParameterJdbcTemplate jdbc;

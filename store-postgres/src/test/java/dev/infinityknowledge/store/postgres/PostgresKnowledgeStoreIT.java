@@ -20,11 +20,14 @@ import dev.infinityknowledge.domain.trace.RetrievalTrace;
 import dev.infinityknowledge.spi.access.KnowledgeAccessDeniedException;
 import dev.infinityknowledge.spi.access.AccessScope;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.indexing.ProjectionJob;
 import dev.infinityknowledge.spi.indexing.ProjectionStatus;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
 import dev.infinityknowledge.spi.retrieval.QueryPlan;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteBatch;
+import dev.infinityknowledge.spi.connector.ConnectorWriteFence;
+import dev.infinityknowledge.spi.management.DocumentLifecycleConflictException;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -445,7 +448,12 @@ class PostgresKnowledgeStoreIT {
         assertEquals(1, source.chunks().size());
         assertEquals(revisionId, source.chunks().getFirst().revisionId());
 
-        queue.complete(claimed.getFirst().id(), "worker-1", now.plusSeconds(2));
+        assertTrue(queue.complete(
+                claimed.getFirst().id(),
+                "worker-1",
+                claimed.getFirst().leaseToken(),
+                now.plusSeconds(2)
+        ));
         assertEquals("SUCCEEDED", jdbc.queryForObject("""
                 SELECT status FROM projection_job
                 WHERE id = ?
@@ -528,26 +536,227 @@ class PostgresKnowledgeStoreIT {
     }
 
     /**
-     * Adapter 后启时可按空间安全回填当前活动修订，运行中的任务不会被抢占。
+     * A reclaimed lease receives a new token and rejects stale transitions.
      */
     @Test
-    void rebuildsActiveSpaceProjectionsWithoutResettingRunningJobs() {
-        seedTenantAndSpace();
-        UUID documentId = UUID.randomUUID();
+    void rejectsCompletionAndFailureFromAnExpiredProjectionLease() {
+        String tenant = "tenant-expired-projection-lease";
+        String space = "engineering";
+        seedTenantSpaceAndConnector(tenant, space);
+        DocumentId documentId = DocumentId.random();
         UUID revisionId = UUID.randomUUID();
-        seedSearchDocument(documentId, revisionId, UUID.randomUUID());
+        Instant now = Instant.parse("2026-08-03T04:00:00Z");
+        assertTrue(writer(Set.of()).write(batch(
+                tenant,
+                space,
+                documentId,
+                revisionId,
+                "7".repeat(64),
+                "expired-lease.md",
+                "expired projection lease content",
+                now
+        )).changed());
         var queue = new PostgresProjectionJobQueue(
                 jdbc,
                 new TransactionTemplate(new DataSourceTransactionManager(dataSource))
         );
+        assertEquals(1, queue.rebuildSpace(
+                new TenantId(tenant),
+                new KnowledgeSpaceId(space),
+                Set.of(ProjectionType.KEYWORD),
+                now
+        ));
+        jdbc.update("""
+                UPDATE projection_job
+                   SET available_at = '1970-01-01T00:00:00Z'
+                 WHERE tenant_id = ?
+                   AND revision_id = ?
+                   AND projection_type = 'KEYWORD'
+                """, tenant, revisionId);
+
+        ProjectionJob first = queue.claim(
+                "worker-old",
+                Set.of(ProjectionType.KEYWORD),
+                1,
+                Duration.ofSeconds(10),
+                now.plusSeconds(1)
+        ).getFirst();
+        assertEquals(revisionId, first.revisionId());
+        ProjectionJob second = queue.claim(
+                "worker-new",
+                Set.of(ProjectionType.KEYWORD),
+                1,
+                Duration.ofSeconds(10),
+                now.plusSeconds(12)
+        ).getFirst();
+
+        assertTrue(second.leaseToken() > first.leaseToken());
+        assertFalse(queue.complete(
+                first.id(),
+                "worker-old",
+                first.leaseToken(),
+                now.plusSeconds(13)
+        ));
+        assertFalse(queue.fail(
+                first.id(),
+                "worker-old",
+                first.leaseToken(),
+                "KEYWORD_PROJECTION_FAILED",
+                now.plusSeconds(14),
+                false,
+                now.plusSeconds(13)
+        ));
+        assertTrue(queue.complete(
+                second.id(),
+                "worker-new",
+                second.leaseToken(),
+                now.plusSeconds(13)
+        ));
+        assertEquals("SUCCEEDED", jdbc.queryForObject(
+                "SELECT status FROM projection_job WHERE id = ?",
+                String.class,
+                second.id()
+        ));
+    }
+
+    /**
+     * Metadata changes during projection are durably scheduled after completion.
+     */
+    @Test
+    void requeuesProjectionWhenMetadataChangesDuringAnActiveLease() {
+        String tenant = "tenant-running-metadata";
+        String space = "engineering";
+        seedTenantSpaceAndConnector(tenant, space);
+        var writer = writer(Set.of(ProjectionType.KEYWORD));
+        DocumentId documentId = DocumentId.random();
+        UUID revisionId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-03T04:30:00Z");
+        var original = batch(
+                tenant,
+                space,
+                documentId,
+                revisionId,
+                "8".repeat(64),
+                "running-metadata.md",
+                "stable content",
+                now
+        );
+        assertTrue(writer.write(original).changed());
+        jdbc.update("""
+                UPDATE projection_job
+                   SET available_at = '1970-01-01T00:00:00Z'
+                 WHERE tenant_id = ?
+                   AND revision_id = ?
+                   AND projection_type = 'KEYWORD'
+                """, tenant, revisionId);
+        var queue = new PostgresProjectionJobQueue(
+                jdbc,
+                new TransactionTemplate(new DataSourceTransactionManager(dataSource))
+        );
+        ProjectionJob first = queue.claim(
+                "metadata-worker",
+                Set.of(ProjectionType.KEYWORD),
+                1,
+                Duration.ofMinutes(1),
+                now.plusSeconds(1)
+        ).getFirst();
+        assertEquals(new TenantId(tenant), first.tenantId());
+        assertEquals(documentId, first.documentId());
+        assertEquals(revisionId, first.revisionId());
+        var oldDocument = original.document();
+        var changedDocument = new KnowledgeDocument(
+                oldDocument.id(),
+                oldDocument.tenantId(),
+                oldDocument.spaceId(),
+                "Updated while running",
+                oldDocument.source(),
+                oldDocument.status(),
+                oldDocument.authority(),
+                oldDocument.metadata(),
+                oldDocument.createdAt(),
+                now.plusSeconds(2)
+        );
+
+        assertTrue(writer.write(new KnowledgeWriteBatch(
+                changedDocument,
+                original.revision(),
+                original.elements(),
+                original.chunks()
+        )).changed());
+        assertTrue(jdbc.queryForObject(
+                "SELECT requeue_requested FROM projection_job WHERE id = ?",
+                Boolean.class,
+                first.id()
+        ));
+        assertTrue(queue.complete(
+                first.id(),
+                "metadata-worker",
+                first.leaseToken(),
+                now.plusSeconds(3)
+        ));
+        assertEquals("PENDING", jdbc.queryForObject(
+                "SELECT status FROM projection_job WHERE id = ?",
+                String.class,
+                first.id()
+        ));
+        assertFalse(jdbc.queryForObject(
+                "SELECT requeue_requested FROM projection_job WHERE id = ?",
+                Boolean.class,
+                first.id()
+        ));
+        jdbc.update(
+                "UPDATE projection_job SET available_at = '1970-01-01T00:00:00Z' WHERE id = ?",
+                first.id()
+        );
+        ProjectionJob refreshed = queue.claim(
+                "metadata-worker",
+                Set.of(ProjectionType.KEYWORD),
+                1,
+                Duration.ofMinutes(1),
+                now.plusSeconds(4)
+        ).getFirst();
+        assertTrue(refreshed.leaseToken() > first.leaseToken());
+    }
+
+    /**
+     * Rebuild marks a running job dirty without stealing its current lease.
+     */
+    @Test
+    void rebuildsActiveSpaceProjectionsWithoutResettingRunningJobs() {
+        String tenant = "tenant-rebuild-projections";
+        String space = "engineering";
+        seedTenantSpaceAndConnector(tenant, space);
+        DocumentId documentId = DocumentId.random();
+        UUID revisionId = UUID.randomUUID();
         Instant now = Instant.parse("2026-08-03T05:00:00Z");
+        assertTrue(writer(Set.of()).write(batch(
+                tenant,
+                space,
+                documentId,
+                revisionId,
+                "9".repeat(64),
+                "rebuild.md",
+                "projection rebuild content",
+                now
+        )).changed());
+        var queue = new PostgresProjectionJobQueue(
+                jdbc,
+                new TransactionTemplate(new DataSourceTransactionManager(dataSource))
+        );
 
         assertEquals(2, queue.rebuildSpace(
-                new TenantId("tenant-a"),
-                new KnowledgeSpaceId("engineering"),
+                new TenantId(tenant),
+                new KnowledgeSpaceId(space),
                 Set.of(ProjectionType.KEYWORD, ProjectionType.VECTOR),
                 now
         ));
+        jdbc.update("""
+                UPDATE projection_job
+                   SET available_at = '1970-01-01T00:00:00Z'
+                 WHERE tenant_id = ?
+                   AND revision_id = ?
+                   AND projection_type = 'VECTOR'
+                """, tenant, revisionId);
         var vector = queue.claim(
                 "rebuild-worker",
                 Set.of(ProjectionType.VECTOR),
@@ -556,31 +765,38 @@ class PostgresKnowledgeStoreIT {
                 now.plusSeconds(1)
         );
         assertEquals(1, vector.size());
+        assertEquals(revisionId, vector.getFirst().revisionId());
 
         assertEquals(1, queue.rebuildSpace(
-                new TenantId("tenant-a"),
-                new KnowledgeSpaceId("engineering"),
+                new TenantId(tenant),
+                new KnowledgeSpaceId(space),
                 Set.of(ProjectionType.KEYWORD, ProjectionType.VECTOR),
                 now.plusSeconds(2)
         ));
         assertEquals("RUNNING", jdbc.queryForObject("""
                 SELECT status FROM projection_job
-                WHERE tenant_id = 'tenant-a'
+                WHERE tenant_id = ?
                   AND revision_id = ?
                   AND projection_type = 'VECTOR'
-                """, String.class, revisionId));
+                """, String.class, tenant, revisionId));
+        assertTrue(jdbc.queryForObject("""
+                SELECT requeue_requested FROM projection_job
+                WHERE tenant_id = ?
+                  AND revision_id = ?
+                  AND projection_type = 'VECTOR'
+                """, Boolean.class, tenant, revisionId));
         assertEquals("PENDING", jdbc.queryForObject("""
                 SELECT status FROM projection_job
-                WHERE tenant_id = 'tenant-a'
+                WHERE tenant_id = ?
                   AND revision_id = ?
                   AND projection_type = 'KEYWORD'
-                """, String.class, revisionId));
+                """, String.class, tenant, revisionId));
         assertEquals(documentId.value(), jdbc.queryForObject("""
                 SELECT document_id FROM projection_job
-                WHERE tenant_id = 'tenant-a'
+                WHERE tenant_id = ?
                   AND revision_id = ?
                   AND projection_type = 'KEYWORD'
-                """, UUID.class, revisionId));
+                """, UUID.class, tenant, revisionId));
     }
 
     /**
@@ -861,6 +1077,92 @@ class PostgresKnowledgeStoreIT {
     /**
      * 相同正文在语言契约变化后必须生成独立修订，避免过滤继续使用旧语言。
      */
+    @Test
+    void deletedDocumentRequiresExplicitLifecycleRestoreBeforeIngestion() {
+        String tenant = "tenant-deleted-tombstone";
+        String space = "engineering";
+        seedTenantSpaceAndConnector(tenant, space);
+        var writer = writer(Set.of(ProjectionType.KEYWORD));
+        DocumentId documentId = DocumentId.random();
+        UUID revisionId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-03T02:47:00Z");
+        var original = batch(
+                tenant, space, documentId, revisionId,
+                "9".repeat(64), "deleted.md", "stable content", now
+        );
+        assertTrue(writer.write(original).changed());
+        var lifecycle = new PostgresDocumentLifecycleStore(
+                jdbc,
+                new TransactionTemplate(new DataSourceTransactionManager(dataSource))
+        );
+        long version = jdbc.queryForObject("""
+                SELECT version FROM knowledge_document
+                 WHERE tenant_id = ? AND id = ?
+                """, Long.class, tenant, documentId.value());
+        var deleted = lifecycle.transition(
+                new TenantId(tenant), documentId.value(), version,
+                DocumentStatus.DELETED, now.plusSeconds(1)
+        ).orElseThrow();
+
+        assertThrows(
+                DocumentLifecycleConflictException.class,
+                () -> writer.write(original)
+        );
+        assertEquals("DELETED", jdbc.queryForObject("""
+                SELECT status FROM knowledge_document
+                 WHERE tenant_id = ? AND id = ?
+                """, String.class, tenant, documentId.value()));
+
+        lifecycle.transition(
+                new TenantId(tenant), documentId.value(), deleted.version(),
+                DocumentStatus.ACTIVE, now.plusSeconds(2)
+        ).orElseThrow();
+        assertFalse(writer.write(original).changed());
+    }
+
+    @Test
+    void staleConnectorFenceCannotPublishAKnowledgeRevision() {
+        String tenant = "tenant-connector-write-fence";
+        String space = "engineering";
+        seedTenantSpaceAndConnector(tenant, space);
+        UUID runId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO connector_sync_run
+                    (id, tenant_id, connector_id, snapshot_id, status,
+                     started_at, principal_json, lease_owner, lease_token, lease_until)
+                VALUES (?, ?, ?, ?, 'RUNNING', current_timestamp,
+                        '{}'::jsonb, 'worker-new', 2,
+                        current_timestamp + interval '5 minutes')
+                """, runId, tenant, "api-upload:" + space, UUID.randomUUID());
+        DocumentId documentId = DocumentId.random();
+        UUID revisionId = UUID.randomUUID();
+        var source = batch(
+                tenant, space, documentId, revisionId,
+                "6".repeat(64), "fenced.md", "stale content",
+                Instant.parse("2026-08-03T02:49:00Z")
+        );
+        var stale = new KnowledgeWriteBatch(
+                source.document(), source.revision(), source.elements(), source.chunks(),
+                null, new ConnectorWriteFence(
+                        new TenantId(tenant), runId, "worker-old", 1
+                )
+        );
+
+        assertThrows(IllegalStateException.class, () -> writer(Set.of()).write(stale));
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT count(*) FROM knowledge_document
+                 WHERE tenant_id = ? AND id = ?
+                """, Integer.class, tenant, documentId.value()));
+
+        var current = new KnowledgeWriteBatch(
+                source.document(), source.revision(), source.elements(), source.chunks(),
+                null, new ConnectorWriteFence(
+                        new TenantId(tenant), runId, "worker-new", 2
+                )
+        );
+        assertTrue(writer(Set.of()).write(current).changed());
+    }
+
     @Test
     void createsDistinctRevisionWhenLanguageChangesWithoutContentChanges() {
         String tenant = "tenant-language-revision";

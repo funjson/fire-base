@@ -3,6 +3,7 @@ package dev.infinityknowledge.store.postgres;
 import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
+import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -71,9 +72,9 @@ public final class PostgresActiveRevisionGuard implements ActiveRevisionGuard {
                 .map(candidate -> candidate.documentId().value())
                 .distinct()
                 .toList();
-        Map<UUID, UUID> activeRevisions = new HashMap<>();
+        Map<UUID, ActiveHead> activeHeads = new HashMap<>();
         jdbc.query("""
-                SELECT id, active_revision_id
+                SELECT id, space_id, active_revision_id
                 FROM knowledge_document
                 WHERE tenant_id = :tenantId
                   AND status = 'ACTIVE'
@@ -82,15 +83,24 @@ public final class PostgresActiveRevisionGuard implements ActiveRevisionGuard {
                 new MapSqlParameterSource()
                         .addValue("tenantId", tenantId.value())
                         .addValue("documentIds", documentIds),
-                (RowCallbackHandler) resultSet -> activeRevisions.put(
+                (RowCallbackHandler) resultSet -> activeHeads.put(
                         resultSet.getObject("id", UUID.class),
-                        resultSet.getObject("active_revision_id", UUID.class)
+                        new ActiveHead(
+                                new KnowledgeSpaceId(resultSet.getString("space_id")),
+                                resultSet.getObject("active_revision_id", UUID.class)
+                        )
                 )
         );
         return candidates.stream()
-                .filter(candidate -> candidate.revisionId().equals(
-                        activeRevisions.get(candidate.documentId().value())
-                ))
+                .filter(candidate -> {
+                    ActiveHead head = activeHeads.get(candidate.documentId().value());
+                    return head != null
+                            && head.spaceId().equals(candidate.spaceId())
+                            && head.revisionId().equals(candidate.revisionId());
+                })
                 .toList();
+    }
+
+    private record ActiveHead(KnowledgeSpaceId spaceId, UUID revisionId) {
     }
 }

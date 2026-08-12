@@ -26,6 +26,16 @@ const DocumentsPage = lazy(() =>
     default: module.DocumentsPage,
   })),
 )
+const WikiPagesPage = lazy(() =>
+  import('./pages/WikiPagesPage').then((module) => ({
+    default: module.WikiPagesPage,
+  })),
+)
+const GraphPage = lazy(() =>
+  import('./pages/GraphPage').then((module) => ({
+    default: module.GraphPage,
+  })),
+)
 const RetrievalPage = lazy(() =>
   import('./pages/RetrievalPage').then((module) => ({
     default: module.RetrievalPage,
@@ -43,6 +53,11 @@ const ConnectorsPage = lazy(() =>
 )
 const TracesPage = lazy(() =>
   import('./pages/TracesPage').then((module) => ({ default: module.TracesPage })),
+)
+const AuditEventsPage = lazy(() =>
+  import('./pages/AuditEventsPage').then((module) => ({
+    default: module.AuditEventsPage,
+  })),
 )
 
 const queryClient = new QueryClient({
@@ -106,6 +121,14 @@ function AuthGate() {
                   path="documents"
                   element={<AdminPage page={<DocumentsPage />} />}
                 />
+                <Route
+                  path="wiki"
+                  element={<AdminPage page={<WikiPagesPage />} />}
+                />
+                <Route
+                  path="graph"
+                  element={<AdminPage page={<GraphPage />} />}
+                />
                 <Route path="retrieval" element={<RetrievalPage />} />
                 <Route
                   path="evaluations"
@@ -118,6 +141,10 @@ function AuthGate() {
                 <Route
                   path="traces"
                   element={<AdminPage page={<TracesPage />} />}
+                />
+                <Route
+                  path="audit-events"
+                  element={<AdminPage page={<AuditEventsPage />} />}
                 />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>

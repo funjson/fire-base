@@ -21,12 +21,12 @@ public record IndexingProperties(
      * Applies safe defaults and validates worker resource bounds.
      */
     public IndexingProperties {
-        batchSize = batchSize < 1 ? 8 : batchSize;
+        batchSize = batchSize < 1 ? 1 : batchSize;
         if (batchSize > 256) {
             throw new IllegalArgumentException("batchSize must not exceed 256");
         }
         pollInterval = defaultPositive(pollInterval, Duration.ofSeconds(1), "pollInterval");
-        leaseDuration = defaultPositive(leaseDuration, Duration.ofMinutes(2), "leaseDuration");
+        leaseDuration = defaultPositive(leaseDuration, Duration.ofMinutes(5), "leaseDuration");
         maxAttempts = maxAttempts < 1 ? 5 : maxAttempts;
         if (maxAttempts > 100) {
             throw new IllegalArgumentException("maxAttempts must not exceed 100");

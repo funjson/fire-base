@@ -86,7 +86,7 @@ class PrincipalProvisioningFilterTest {
 
     private void authenticate(Jwt jwt) {
         SecurityContextHolder.getContext().setAuthentication(
-                new JwtAuthenticationToken(jwt)
+                new JwtAuthenticationToken(jwt, List.of())
         );
     }
 

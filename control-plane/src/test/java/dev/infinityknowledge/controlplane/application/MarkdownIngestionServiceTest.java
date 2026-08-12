@@ -11,6 +11,7 @@ import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.ingestion.HeadingAwareChunker;
 import dev.infinityknowledge.ingestion.MarkdownElementParser;
 import dev.infinityknowledge.spi.connector.SourceRecord;
+import dev.infinityknowledge.spi.connector.ConnectorStateStore;
 import dev.infinityknowledge.spi.ingestion.KnowledgeCatalog;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteBatch;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteResult;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -166,7 +168,7 @@ class MarkdownIngestionServiceTest {
         Instant modifiedAt = Instant.parse("2026-08-03T00:00:00Z");
 
         service.ingestSourceRecord(
-                principal(),
+                lease(),
                 new KnowledgeSpaceId("space-a"),
                 new SourceRecord(
                         source, "Shared", "text/markdown", "# Shared",
@@ -175,7 +177,7 @@ class MarkdownIngestionServiceTest {
                 80
         );
         service.ingestSourceRecord(
-                principal(),
+                lease(),
                 new KnowledgeSpaceId("space-a"),
                 new SourceRecord(
                         source, "Shared", "TEXT/MARKDOWN", "# Shared",
@@ -195,6 +197,8 @@ class MarkdownIngestionServiceTest {
                 "text/markdown",
                 batches.getAllValues().get(1).revision().mediaType()
         );
+        assertEquals("worker-a", batches.getAllValues().getFirst()
+                .connectorWriteFence().leaseOwner());
     }
 
     private static MarkdownIngestionService service(
@@ -224,6 +228,21 @@ class MarkdownIngestionServiceTest {
                 Set.of("knowledge-admin"),
                 Set.of(),
                 false
+        );
+    }
+
+    private static ConnectorStateStore.SynchronizationLease lease() {
+        return new ConnectorStateStore.SynchronizationLease(
+                UUID.randomUUID(),
+                principal(),
+                "obsidian:engineering",
+                UUID.randomUUID(),
+                dev.infinityknowledge.spi.connector.ConnectorCursor.initial(),
+                0,
+                0,
+                "worker-a",
+                3,
+                Instant.parse("2026-08-03T00:02:00Z")
         );
     }
 

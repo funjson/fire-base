@@ -75,6 +75,14 @@ class PostgresKnowledgeAdministrationStoreIT {
     }
 
     @Test
+    void listsDeletedDocumentsOnlyWhenExplicitlyRequested() {
+        var page = documents(null, "DELETED");
+
+        assertEquals(1, page.total());
+        assertEquals("Deleted", page.items().getFirst().title());
+    }
+
+    @Test
     void listsDocumentsBySpaceAndStatus() {
         var page = documents("engineering", "ACTIVE");
 

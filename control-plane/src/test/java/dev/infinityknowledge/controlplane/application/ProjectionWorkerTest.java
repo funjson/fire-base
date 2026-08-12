@@ -123,7 +123,8 @@ class ProjectionWorkerTest {
                 DocumentId.random(),
                 UUID.randomUUID(),
                 ProjectionType.VECTOR,
-                attempt
+                attempt,
+                7L
         );
     }
 
@@ -154,25 +155,48 @@ class ProjectionWorkerTest {
         }
 
         @Override
-        public void complete(UUID jobId, String completedBy, Instant now) {
+        public boolean complete(
+                UUID jobId,
+                String completedBy,
+                long leaseToken,
+                Instant now
+        ) {
             assertThat(completedBy).isEqualTo(workerId);
+            assertThat(leaseToken).isEqualTo(job.leaseToken());
             completed = true;
+            return true;
         }
 
         @Override
-        public void fail(
+        public boolean heartbeat(
+                UUID jobId,
+                String heartbeatBy,
+                long leaseToken,
+                Instant leaseUntil,
+                Instant now
+        ) {
+            assertThat(heartbeatBy).isEqualTo(workerId);
+            assertThat(leaseToken).isEqualTo(job.leaseToken());
+            return true;
+        }
+
+        @Override
+        public boolean fail(
                 UUID jobId,
                 String failedBy,
+                long leaseToken,
                 String stableErrorCode,
                 Instant retryAt,
                 boolean deadLetter,
                 Instant now
         ) {
             assertThat(failedBy).isEqualTo(workerId);
+            assertThat(leaseToken).isEqualTo(job.leaseToken());
             failed = true;
             dead = deadLetter;
             errorCode = stableErrorCode;
             availableAt = retryAt;
+            return true;
         }
     }
 }

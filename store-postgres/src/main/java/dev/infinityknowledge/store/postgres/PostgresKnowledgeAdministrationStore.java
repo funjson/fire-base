@@ -84,7 +84,6 @@ public final class PostgresKnowledgeAdministrationStore
         String status = blankToNull(filter.status());
         StringBuilder where = new StringBuilder("""
                  WHERE d.tenant_id = ?
-                   AND d.status <> 'DELETED'
                 """);
         List<Object> parameters = new ArrayList<>();
         parameters.add(tenantId.value());
@@ -92,7 +91,9 @@ public final class PostgresKnowledgeAdministrationStore
             where.append("   AND d.space_id = ?\n");
             parameters.add(spaceId);
         }
-        if (status != null) {
+        if (status == null) {
+            where.append("   AND d.status <> 'DELETED'\n");
+        } else {
             where.append("   AND d.status = ?\n");
             parameters.add(status);
         }
@@ -113,7 +114,9 @@ public final class PostgresKnowledgeAdministrationStore
                        count(c.id) AS chunk_count,
                        coalesce(p.keyword_status, 'SKIPPED') AS keyword_status,
                        coalesce(p.vector_status, 'SKIPPED') AS vector_status,
-                       coalesce(p.graph_status, 'SKIPPED') AS graph_status
+                       coalesce(p.graph_status, 'SKIPPED') AS graph_status,
+                       so.original_file_name, so.media_type AS source_media_type,
+                       so.content_length AS source_content_length
                   FROM knowledge_document d
                   LEFT JOIN knowledge_chunk c
                     ON c.tenant_id = d.tenant_id
@@ -128,10 +131,14 @@ public final class PostgresKnowledgeAdministrationStore
                          ORDER BY dip.updated_at DESC
                          LIMIT 1
                   ) p ON TRUE
+                  LEFT JOIN document_source_object so
+                    ON so.tenant_id = d.tenant_id
+                   AND so.revision_id = d.active_revision_id
                 """ + where + """
                  GROUP BY d.id, d.space_id, d.title, d.source_type, d.source_uri,
                           d.status, d.authority, d.version, d.active_revision_id,
-                          d.updated_at, p.keyword_status, p.vector_status, p.graph_status
+                          d.updated_at, p.keyword_status, p.vector_status, p.graph_status,
+                          so.original_file_name, so.media_type, so.content_length
                  ORDER BY d.updated_at DESC, d.id
                  LIMIT ? OFFSET ?
                 """, (row, number) -> new Document(
@@ -148,6 +155,9 @@ public final class PostgresKnowledgeAdministrationStore
                 row.getString("keyword_status"),
                 row.getString("vector_status"),
                 row.getString("graph_status"),
+                row.getString("original_file_name"),
+                row.getString("source_media_type"),
+                nullableLong(row, "source_content_length"),
                 instant(row, "updated_at")
         ), pageParameters.toArray());
         return new DocumentPage(items, limit, offset, total);
@@ -174,6 +184,71 @@ public final class PostgresKnowledgeAdministrationStore
                 row.getString("content"),
                 row.getString("content_hash")
         ), tenantId.value(), documentId);
+    }
+
+    @Override
+    public List<Revision> revisions(TenantId tenantId, UUID documentId) {
+        Objects.requireNonNull(tenantId, "tenantId must not be null");
+        Objects.requireNonNull(documentId, "documentId must not be null");
+        return jdbc.query("""
+                SELECT r.id, r.revision_number, r.content_hash, r.media_type,
+                       r.language, r.parser_version, r.created_at,
+                       d.active_revision_id = r.id AS active,
+                       (SELECT count(*)
+                          FROM knowledge_chunk c
+                         WHERE c.tenant_id = r.tenant_id
+                           AND c.document_id = r.document_id
+                           AND c.revision_id = r.id) AS chunk_count
+                  FROM document_revision r
+                  JOIN knowledge_document d
+                    ON d.tenant_id = r.tenant_id
+                   AND d.id = r.document_id
+                 WHERE r.tenant_id = ? AND r.document_id = ?
+                 ORDER BY r.revision_number DESC
+                """, (row, number) -> new Revision(
+                row.getObject("id", UUID.class),
+                row.getLong("revision_number"),
+                row.getString("content_hash"),
+                row.getString("media_type"),
+                row.getString("language"),
+                row.getString("parser_version"),
+                instant(row, "created_at"),
+                row.getBoolean("active"),
+                row.getLong("chunk_count")
+        ), tenantId.value(), documentId);
+    }
+
+    @Override
+    public List<Chunk> chunks(
+            TenantId tenantId,
+            UUID documentId,
+            UUID revisionId
+    ) {
+        Objects.requireNonNull(tenantId, "tenantId must not be null");
+        Objects.requireNonNull(documentId, "documentId must not be null");
+        Objects.requireNonNull(revisionId, "revisionId must not be null");
+        return jdbc.query("""
+                SELECT c.id, c.ordinal, c.section_path_json::text,
+                       c.content, c.content_hash
+                  FROM knowledge_chunk c
+                  JOIN document_revision r
+                    ON r.tenant_id = c.tenant_id
+                   AND r.id = c.revision_id
+                   AND r.document_id = c.document_id
+                  JOIN knowledge_document d
+                    ON d.tenant_id = r.tenant_id
+                   AND d.id = r.document_id
+                 WHERE c.tenant_id = ?
+                   AND c.document_id = ?
+                   AND c.revision_id = ?
+                 ORDER BY c.ordinal
+                """, (row, number) -> new Chunk(
+                row.getObject("id", UUID.class),
+                row.getInt("ordinal"),
+                stringArray(row.getString("section_path_json")),
+                row.getString("content"),
+                row.getString("content_hash")
+        ), tenantId.value(), documentId, revisionId);
     }
 
     @Override
@@ -294,6 +369,11 @@ public final class PostgresKnowledgeAdministrationStore
     private static Instant instant(ResultSet row, String column) throws SQLException {
         OffsetDateTime value = row.getObject(column, OffsetDateTime.class);
         return value == null ? null : value.toInstant();
+    }
+
+    private static Long nullableLong(ResultSet row, String column) throws SQLException {
+        long value = row.getLong(column);
+        return row.wasNull() ? null : value;
     }
 
     private static String blankToNull(String value) {

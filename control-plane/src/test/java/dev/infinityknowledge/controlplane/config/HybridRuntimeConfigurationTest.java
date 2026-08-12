@@ -57,7 +57,16 @@ class HybridRuntimeConfigurationTest {
     }
 
     private static RetrievalProperties retrieval(RetrievalProperties.Mode mode) {
-        return new RetrievalProperties(mode, 5, 60, 0.5D, 4, 256);
+        return new RetrievalProperties(
+                mode,
+                5,
+                60,
+                0.5D,
+                4,
+                256,
+                java.time.Duration.ofSeconds(35),
+                java.time.Duration.ofSeconds(30)
+        );
     }
 
     private static VectorProperties vector(boolean enabled) {

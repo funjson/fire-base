@@ -13,11 +13,32 @@
     <artifactId>knowledge-ingestion</artifactId>
     <name>Infinity Knowledge :: Ingestion</name>
 
+    <properties>
+        <jsoup.version>1.18.3</jsoup.version>
+        <pdfbox.version>3.0.4</pdfbox.version>
+        <poi.version>5.4.1</poi.version>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dev.infinityknowledge</groupId>
             <artifactId>knowledge-domain</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>${jsoup.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

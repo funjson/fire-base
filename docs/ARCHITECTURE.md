@@ -1,235 +1,194 @@
 # Infinity Knowledge Runtime 总体架构
 
-## 1. 系统定位
+## 1. 定位与边界
 
-Infinity Knowledge Runtime 为 Agent 提供可信的企业知识上下文。它负责知识
-摄取、治理、检索、Evidence、评测和观测，不负责 Agent 的计划循环、业务
-工作流或最终答案生成。
-
-```text
-Agent / Console / Application
-             │ HTTP + OIDC JWT
-             ▼
-        Control Plane
-             │
-      Application Services
-             │
-       Domain / SPI Ports
-       ├────────┬─────────┬──────────┐
-       ▼        ▼         ▼          ▼
- PostgreSQL  Elastic    Milvus   Connector Provider
- fact store   BM25      vector       Obsidian
-```
-
-Phase 1 的完整数据路径是：
+Infinity Knowledge Runtime 为企业 Agent 提供可治理、可追溯、可评测的知识
+上下文。它负责摄取、知识表示、投影、检索、Evidence、评测和观测；Agent 的
+计划循环、业务工作流和最终答案生成不在本系统内。
 
 ```text
-Source → Document/Revision → Element/Chunk → Projection Jobs
-       → PostgreSQL/ES/Milvus → AccessScope → RRF
-       → Evidence/Citation → Trace → Agent API/Evaluation
+Agent Client / Console / Application
+                 | HTTP + OIDC JWT
+                 v
+             Control Plane
+                 |
+        Application Services
+                 |
+          Domain / SPI Ports
+        /       |       |       \
+ PostgreSQL  Elastic  Milvus   Neo4j       MinIO
+ fact/tasks    BM25    vector   graph    original source
 ```
 
-Neo4j Graph 和 LLM Wiki 是后续知识表示，不属于当前运行链路。
+核心数据路径：
 
-## 2. 模块与依赖方向
+```text
+Markdown / Rich file / Obsidian
+  -> Document + immutable Revision + Element + Chunk + Source Reference
+  -> transactional Projection Jobs
+  -> PostgreSQL / Elasticsearch / Milvus / Neo4j
+  -> Keyword + Vector + Graph + Published Wiki retrieval
+  -> ACL + active-revision guard + deadline + RRF + rerank
+  -> Evidence / Citation / Trace
+  -> Agent API / Java Tool / Evaluation / Console
+```
+
+## 2. 模块和依赖方向
 
 ```text
 knowledge-domain
-       ▲
-knowledge-spi ◄──── knowledge-evaluation
-       ▲
-knowledge-runtime   knowledge-ingestion
-       ▲                    ▲
-store-*          connector-obsidian / provider-zhipu
-       ▲                    ▲
-       └────── control-plane ──────┘
+       ^
+knowledge-spi <---- knowledge-evaluation
+       ^
+knowledge-runtime     knowledge-ingestion     knowledge-compiler
+       ^                       ^                      ^
+store-*       connector-obsidian / provider-zhipu ---+
+       ^                       ^
+       +----------- control-plane
 
-knowledge-console → HTTP API
+knowledge-agent-client ---> HTTP API
+knowledge-console -------> HTTP API
 ```
 
-边界约束：
+约束：
 
-- `knowledge-domain` 为纯 Java，不依赖 Spring 或厂商 SDK；
-- `knowledge-spi` 定义运行时所需端口，不暴露 JDBC/ES/Milvus 类型；
-- `control-plane` 的 Controller 只处理 HTTP/JWT/DTO；
-- Application Service 负责权限检查与用例编排，不执行 SQL；
-- PostgreSQL SQL 只存在于 `store-postgres`；
-- 具体 Connector 由 `SourceConnectorProvider` 创建，应用层不直接
-  `new ObsidianVaultConnector(...)`；
-- Composition Root 可以实例化适配器并把它们注入端口。
+- `knowledge-domain` 是纯 Java，不依赖 Spring、JDBC 或厂商 SDK；
+- `knowledge-spi` 只暴露领域端口，不泄露 ES/Milvus/Neo4j/MinIO 类型；
+- Controller 只处理 HTTP、JWT、验证和 DTO；Application Service 编排用例；
+- SQL 只存在于 `store-postgres`；具体存储由 Composition Root 注入；
+- Connector 通过 `SourceConnectorProvider` 注册，不由应用层直接构造；
+- 不为每张表建立 Repository，按用例聚合端口以维持可读性。
 
-为避免 Repository 过度拆分，管理和异步业务采用四个按用例聚合的端口：
+## 3. 权威事实与一致性
 
-| 端口 | 责任 |
-|---|---|
-| `KnowledgeAdministrationStore` | Overview、空间、文档、Chunk、Connector、Trace 读模型 |
-| `KnowledgeGovernanceStore` | Principal、空间和 ACL |
-| `EvaluationStore` | Dataset、Case、Run 和 Case Result |
-| `ConnectorStateStore` | Connector Definition、Checkpoint 和 Sync Run |
+### 3.1 文档和修订
 
-## 3. 写入与一致性
-
-### 3.1 文档事实
-
-PostgreSQL 是 Document、Revision、Element、Chunk、ACL 和任务状态的事实源。
-文档身份由以下 Source Key 唯一确定：
+PostgreSQL 是空间、文档、修订、Element、Chunk、ACL、任务和治理状态的权威
+事实源。文档 Source Key 为：
 
 ```text
 tenantId + spaceId + connectorId + externalId
 ```
 
-API 上传连接器使用 `api-upload:<spaceId>`，因此不同空间的相同
-`externalId` 不会复用同一文档。Flyway V5 迁移旧数据并建立相应组合约束。
+修订是不可变的。完整指纹包含规范化正文 Hash、media type、language 和
+processor version。相同活动指纹幂等；命中历史指纹时重新激活；真正内容或处理
+契约变化时在文档行锁事务内创建新修订。文档、修订、Chunk、Source Object
+引用和 Projection Job 共同提交。
 
-修订采用不可变内容与处理契约：
+管理 API 可以查看所有修订和指定修订的 Chunk。`ACTIVE`、`ARCHIVED`、
+`DELETED` 使用乐观版本做可逆状态转换；普通检索只接受活动文档，管理面可以
+在授权后查看保留的历史事实和原文件。
 
-- 与当前活动修订完整指纹相同：幂等返回；
-- 命中历史非活动完整指纹：重新激活该历史修订；
-- 内容、规范化语言或 Parser/Chunker 处理契约变化：在文档行锁/事务内分配
-  新修订号并发布；
-- 完整指纹由正文 Hash、规范化 media type/language 和 processor version 组成；
-- 活动修订切换、Chunk 和 Projection Job 写入处于同一事务；
-- A→B→A 和并发写入不会使用事务外 `MAX(revision)+1`。
+### 3.2 原文件
 
-### 3.2 外部投影
+文件先写入 MinIO，再在 PostgreSQL 事务内绑定不可猜测的对象引用。系统不向
+HTTP 客户端暴露 Bucket/Object Key，只返回授权后的元数据或流。失败路径会做
+补偿删除；进程在对象写入和数据库提交之间硬崩溃仍可能留下孤儿对象，当前没有
+后台 orphan sweeper。
 
-Elasticsearch 和 Milvus 是可重建投影，不是事实源：
+解析预算限制源文件大小、解压后大小、页面数、Element 数、文本长度、归档条目
+和压缩比。当前解析 TXT/Markdown、HTML、PDF 和 DOCX；不支持 Excel/PPT/OCR。
+
+### 3.3 可重建投影
 
 ```text
 PostgreSQL transaction
-  ├── revision/chunk changes
-  └── projection_job
-            │ lease + retry + dead-letter
-            ▼
-       Projection Worker
-            │ ActiveRevisionGuard
-       ┌────┴────┐
-       ▼         ▼
-      ES       Milvus
+  + revision/chunk/source changes
+  + projection_job (PENDING/RETRY/RUNNING/...)
+                  |
+          lease + token + heartbeat
+                  v
+          Projection Worker
+        /          |          \
+      ES         Milvus      Neo4j
 ```
 
-Worker 在发布前检查目标修订仍为当前活动修订。适配器和检索入口还会通过
-`ActiveRevisionGuard` 批量过滤结果，避免旧任务乱序完成或旧向量返回过期
-知识。按空间的 rebuild API 会为全部活动修订重新排队当前已启用的外部通道，
-用于 Adapter 后启或运维重建。
+Flyway V8 为投影租约增加 fencing token 与 dirty/requeue。Worker 只有持有当前、
+未过期 Token 才能 heartbeat、complete 或 fail；RUNNING 期间再次标脏会在本轮
+结束后回到待处理状态。发布前和读取后均执行 `ActiveRevisionGuard`，过期修订
+不能成为 Evidence。系统仍不提供跨 PostgreSQL/外部存储的分布式事务，物理旧
+记录允许延迟清理，但逻辑读取必须立即拒绝。
 
-当前仍没有跨存储分布式事务、投影租约续期/提交围栏和自动历史回填调度；
-同一修订元数据在 Job 已 RUNNING 后变化时，也需要后续 dirty/requeue 或 fencing
-机制保证最终再次投影。这些属于生产可靠性后续项。
+## 4. 检索运行时
 
-## 4. 读取链路
+1. Resource Server 校验 Issuer、签名、有效期和 API Audience；
+2. 只从 JWT 构造 Tenant、Principal、Role、Department；
+3. `AccessPolicy` 编译 `ALL`、`ONLY(documentIds)` 或 `DENY_ALL`；
+4. 确定性 Query Analyzer 规范化查询，并按关系型词标记 Graph 通道；
+5. Keyword、Vector、Graph 和 Published Wiki Retriever 在有界线程池中并行；
+6. 每个请求有绝对 Deadline，每个通道有超时，取消/饱和使用稳定失败语义；
+7. 各通道执行 tenant/space/document/sourceType/language 约束；
+8. Runtime 再做 ACL 和活动修订守卫；
+9. RRF 融合，可选 `CosineEmbeddingReranker` 对受预算候选重排；
+10. Evidence Builder 返回原始 Chunk Citation，Trace 记录步骤、计数和耗时。
 
-1. Spring Resource Server 校验 Issuer、签名、有效期和
-   `infinity-knowledge-api` Audience；
-2. `JwtPrincipalContextFactory` 从已验证 Token 读取 `tenant_id`、`sub`、
-   Realm Role 和部门，普通请求字段不能覆盖身份；
-3. `PrincipalProvisioningFilter` 幂等登记首次登录主体；已停用租户/主体拒绝；
-4. `AccessPolicy` 把数据库 ACL 编译为显式 `AccessScope`：
-   `ALL`、`ONLY(documentIds)` 或 `DENY_ALL`；
-5. Query Analyzer 只接受 `language`、`sourceType` Filter；PostgreSQL/ES 执行
-   这些过滤，当前 Milvus 通道会明确拒绝并产生降级 Warning，而不是静默放宽；
-6. 已配置 Retriever 并行召回，RRF 去重并融合；
-7. Runtime 再次校验 Tenant、Space、Document Scope 和活动修订；
-8. Evidence Builder 返回稳定 Citation，Trace 记录步骤与耗时。
+标准模式允许单通道降级并返回 Warning；`acceptance` Profile 对配置的 ES、Milvus、
+Neo4j 和 GLM 依赖执行更严格装配/探测。当前没有 Query Rewrite、Multi-query 或
+父子/相邻 Chunk 扩展。
 
-Retriever 不可用时，标准模式可返回通道 Warning；`acceptance` 严格混合模式
-会在启动时探测 ES、Milvus 和 GLM，关键通道缺失时直接失败。
+## 5. Graph 知识层
 
-## 5. 多租户和 ACL
+Graph 领域模型包含 Entity、Event、Relation 和 Provenance。Neo4j 节点/边都
+携带 tenant、space、document、revision/chunk 来源；查询使用固定 Cypher 模板，
+不把用户文本拼接成 Cypher。Graph 投影在活动修订范围内幂等更新，Retriever
+限制最大 hops 和结果数，并把关系映射回有来源的 Evidence。
 
-权限事实保存在 PostgreSQL，Keycloak 负责认证和声明：
+实体关系可由 GLM 抽取；Graph 管理 API 和控制台用于 tenant/ACL 范围内探索。
+当前没有 Entity/Relation 人工标注集、社区摘要和 Graph 质量指标。
+
+## 6. Wiki 知识层
+
+Wiki 编译以已授权的 Document/Revision/Chunk 为显式来源：
 
 ```text
-JWT tenant/sub/roles/departments
-              │
-              ▼
-     Principal + Space ACL
-   USER / ROLE / DEPARTMENT / TENANT
-              │
-              ▼
-     Accessible Spaces / AccessScope
-              │
-              ▼
-   index-side filter + runtime verification
+source chunks -> deterministic or optional GLM compiler -> immutable page revision
+             -> DRAFT -> IN_REVIEW -> PUBLISHED -> ARCHIVED
 ```
 
-约束：
+页面保存 source coverage、content hash、compiler version 和来源引用；状态转换
+使用 `expectedVersion` 防止覆盖更新。只有 PUBLISHED 页面进入 PAGE Retriever，
+Retriever 返回页面关联的原始活动 Chunk，而不是把未经验证的生成文本冒充事实。
 
-- 每个持久对象、检索投影和任务都携带 `tenantId`；
-- 管理查询和治理端口都以当前 Principal/Tenant 为输入；
-- `knowledge-admin` 可创建空间和维护 ACL；
-- Reader 使用 `/api/v1/spaces/accessible`，不依赖管理员空间列表；
-- 未授权空间不会进入检索请求，越权候选也不会进入 Evidence；
-- `system_principal=true` 只有受配置 Client 才能生效。
+当前没有 Claim/Link/Diff/回滚、来源变更影响分析或自动增量重编译。
 
-ACL grant/revoke 会立即改变后续查询生成的 AccessScope。当前不宣称 ACL
-变更与所有外部投影字段之间存在跨存储原子更新。
+## 7. 异步任务和 Connector 对账
 
-## 6. 管理、评测和连接器
+Projection、Connector 和 Evaluation 都使用有界批次/线程池。Connector/Evaluation
+Run 先持久化为 `PENDING`，Coordinator 用租约和 fencing token Claim，周期性
+恢复 PENDING 或租约过期的 RUNNING 任务。执行快照持久化，过期 Worker 无权提交；
+立即提交遇到队列饱和时 Run 进入明确失败状态，而不是遗留可被误执行的任务。
 
-### 管理控制台
+Obsidian 每次成功完整扫描产生 Snapshot Manifest。只有仍持有租约且本轮完整
+成功时才原子提升 Manifest，并将上一成功快照中缺失的文档归档；失败/部分扫描
+不触发删除。移动按“旧 externalId 归档、新 externalId 创建”处理。当前没有
+定时源发现和第二个真实 Connector。
 
-控制台提供：
+## 8. 多租户、安全与观测
 
-- Dashboard 与租户管理读模型；
-- 空间创建、ACL grant/revoke、按空间投影 rebuild；
-- 文档筛选、分页、Chunk 和投影状态；
-- Retrieval Lab、Evidence、Citation、Warning 和 Trace；
-- Connector 配置、同步、Run 轮询；
-- Evaluation Dataset/Case/Run 和指标。
+- 每个事实、投影、任务、Wiki 页面、Graph 节点和审计事件都携带 tenant；
+- ACL 支持 `USER`、`ROLE`、`DEPARTMENT`、`TENANT`；
+- Reader 使用可访问空间 API，Admin 才能使用管理/治理端点；
+- `system_principal=true` 仅对受信 Client 生效；
+- 来源 URI、Obsidian 实路径和内联原文件类型均使用白名单；
+- `X-Request-Id` 贯穿响应、错误、MDC、Trace；正文、Token、API Key 不进普通日志；
+- `MeteredTraceSink` 输出有界标签的检索时延/结果指标；
+- `MutationAuditFilter` 只记录变更请求的 route pattern、主体、状态和耗时，不记录
+  Body、Token、查询文本或具体资源 URI；审计查询按 tenant 分页。
 
-Reader 只显示允许的检索导航；未知路由和渲染错误有显式恢复页面。
+## 9. 存储职责
 
-### Evaluation
-
-`EvaluationApplicationService` 通过 `EvaluationStore` 编排持久化数据，实际
-执行使用独立有界线程池。当前支持 Recall@K、MRR、nDCG 和 Case 级错误隔离。
-进程中断后的租约恢复尚未实现。
-
-### Connector
-
-`ConnectorApplicationService` 通过 `ConnectorStateStore` 和
-`SourceConnectorProvider` 工作。V6 数据库约束确保同一租户/Connector 只有
-一个 RUNNING Run，控制台按 `runId` 轮询终态并可在刷新后恢复展示。
-
-Obsidian 允许根和文件使用真实路径校验，不跟随未批准的符号链接。当前只支持
-全量快照；文件删除/移动对账、定时调度和多实例任务恢复尚未实现。
-
-## 7. 数据职责
-
-| 组件 | Phase 1 职责 |
+| 组件 | 职责 |
 |---|---|
-| PostgreSQL | 权威元数据、修订、Chunk、ACL、任务、治理读模型、评测和 Trace |
-| Elasticsearch | 可重建的 BM25/精确词投影 |
-| Milvus | 可重建的 Chunk Embedding 投影 |
-| GLM | 摄取投影和语义查询 Embedding |
-| Keycloak | 本地 OIDC、测试角色/用户、API Audience |
-| MinIO | 仅作为 Milvus Compose 依赖；不是知识原文件存储 |
-| Neo4j | 未接入 |
+| PostgreSQL | 权威事实、ACL、修订、Chunk、任务、Wiki、评测、Trace、Audit |
+| Elasticsearch | 可重建 BM25/精确词投影 |
+| Milvus | 可重建 Chunk Embedding 投影 |
+| Neo4j | 可重建关系投影和 Graph traversal |
+| MinIO | 原文件保留；同时是本地 Milvus 的对象存储依赖 |
+| GLM | Embedding；可选 Graph/Wiki 生成 |
+| Keycloak | OIDC、Audience、测试角色和用户 |
 
-## 8. 安全与观测
+## 10. 当前工程边界
 
-- 业务 API 除 Health 外全部要求 Bearer JWT；
-- Token 必须含 API Audience；缺少身份 Claim 返回 401；
-- 来源 URI 使用配置化协议白名单，默认允许 `http`、`https`、`obsidian`；
-  前端仍独立限制可点击协议；
-- `X-Request-Id` 在入口规范化一次，所有响应 Header 均返回；进入应用层后还
-  贯穿 `ApiError`、Evidence、Trace 和 MDC，安全链直接 401/403 不承诺 JSON 错误体；
-- Trace 保存查询 Hash、ID、候选数、耗时和 Warning，不保存 Query/Chunk 正文；
-- API Key 和 Token 不进入普通日志。
-
-业务指标、OpenTelemetry 跨服务导出、生产级审计事件和 HA 告警仍需后续补齐。
-
-## 9. Phase 1 边界
-
-Phase 1 的验收目标是“安全、可追溯、可评测的混合检索基础设施”，不是完整
-企业知识操作系统。以下内容保持 `NOT_SUPPORTED`：
-
-- Graph/Neo4j 与 GraphRAG；
-- Wiki/Page 编译、审核与知识图谱抽取；
-- PDF/DOCX/HTML/Office 解析；
-- 原文件/附件 MinIO 存储；
-- 生成答案质量评测；
-- 多实例调度恢复、跨区域容灾、零停机迁移等生产 HA。
-
-这些边界不得通过预留的模型、Docker 依赖或文档目标描述成已实现能力。
+实现边界、验证证据和待验收项以 [P1/P2 状态](P1-P2-STATUS.md) 为准。当前不
+宣称生产 HA；备份恢复、配额、容量/SLO、跨区域容灾和跨服务 OpenTelemetry
+导出仍需独立生产化阶段。

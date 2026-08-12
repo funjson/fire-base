@@ -12,13 +12,25 @@ import java.util.UUID;
  * @param revisionId 活动修订标识
  * @param changed 是否改变活动修订、生命周期或需投影的文档字段
  * @param chunkCount 活动修订 Chunk 数
+ * @param sourceObjectAccepted whether the supplied original object became authoritative
  */
 public record KnowledgeWriteResult(
         DocumentId documentId,
         UUID revisionId,
         boolean changed,
-        int chunkCount
+        int chunkCount,
+        boolean sourceObjectAccepted
 ) {
+
+    /** Preserves the text-only result constructor. */
+    public KnowledgeWriteResult(
+            DocumentId documentId,
+            UUID revisionId,
+            boolean changed,
+            int chunkCount
+    ) {
+        this(documentId, revisionId, changed, chunkCount, false);
+    }
 
     /**
      * 校验写入结果。

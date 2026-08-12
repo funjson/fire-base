@@ -57,8 +57,8 @@ class MilvusVectorIndexIT {
 
     @AfterEach
     void cleanUp() {
-        dropIfPresent(prefix + "_test_model_4_it");
-        dropIfPresent(prefix + "_zhipu_embedding_3_2048_it");
+        dropIfPresent(prefix + "_test_model_4_it_metadata_v2");
+        dropIfPresent(prefix + "_zhipu_embedding_3_2048_it_metadata_v2");
         client.close();
     }
 
@@ -92,6 +92,7 @@ class MilvusVectorIndexIT {
                 new AccessScope(tenantA, Set.of(space), Set.of()),
                 SPEC,
                 GENERATION,
+                Map.of(),
                 List.of(1.0D, 0.0D, 0.0D, 0.0D),
                 10
         ));
@@ -100,6 +101,62 @@ class MilvusVectorIndexIT {
         assertEquals(tenantA, result.getFirst().tenantId());
         assertEquals("alpha", result.getFirst().content());
         assertTrue(result.getFirst().score() > 0.99D);
+    }
+
+    @Test
+    void enforcesLanguageAndSourceTypeFiltersInsideMilvus() {
+        MilvusVectorIndex index = new MilvusVectorIndex(
+                client,
+                prefix,
+                8,
+                allowAllRevisions()
+        );
+        TenantId tenantId = new TenantId("tenant-a");
+        KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
+        List<Double> vector = List.of(1.0D, 0.0D, 0.0D, 0.0D);
+        index.upsert(List.of(
+                record(
+                        tenantId,
+                        spaceId,
+                        "obsidian-zh",
+                        "OBSIDIAN",
+                        "zh-CN",
+                        vector
+                ),
+                record(
+                        tenantId,
+                        spaceId,
+                        "api-zh",
+                        "API",
+                        "zh-CN",
+                        vector
+                ),
+                record(
+                        tenantId,
+                        spaceId,
+                        "obsidian-en",
+                        "OBSIDIAN",
+                        "en-US",
+                        vector
+                )
+        ));
+
+        var result = index.search(new VectorSearchRequest(
+                AccessScope.all(tenantId, Set.of(spaceId)),
+                SPEC,
+                GENERATION,
+                Map.of(
+                        "language", "zh-CN",
+                        "sourceType", "OBSIDIAN"
+                ),
+                vector,
+                10
+        ));
+
+        assertEquals(1, result.size());
+        assertEquals("obsidian-zh", result.getFirst().content());
+        assertEquals("OBSIDIAN", result.getFirst().metadata().get("sourceType"));
+        assertEquals("zh-CN", result.getFirst().metadata().get("language"));
     }
 
     @Test
@@ -165,6 +222,7 @@ class MilvusVectorIndexIT {
                 new AccessScope(tenantId, Set.of(spaceId), Set.of()),
                 productionSpec,
                 GENERATION,
+                Map.of(),
                 queryVector.values(),
                 5
         ));
@@ -239,6 +297,7 @@ class MilvusVectorIndexIT {
                 new AccessScope(tenantId, Set.of(spaceId), Set.of()),
                 SPEC,
                 GENERATION,
+                Map.of(),
                 List.of(1.0D, 0.0D, 0.0D, 0.0D),
                 10
         ));
@@ -246,6 +305,67 @@ class MilvusVectorIndexIT {
         assertEquals(1, result.size());
         assertEquals(activeRevision, result.getFirst().revisionId());
         assertEquals("active revision", result.getFirst().content());
+    }
+
+    @Test
+    void overfetchesWhenAnInactiveRevisionOccupiesTheInitialVectorWindow() {
+        TenantId tenantId = new TenantId("tenant-a");
+        KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
+        DocumentId documentId = DocumentId.random();
+        UUID staleRevision = UUID.randomUUID();
+        UUID activeRevision = UUID.randomUUID();
+        ActiveRevisionGuard activeOnly = new ActiveRevisionGuard() {
+            @Override
+            public boolean isActive(
+                    TenantId ignoredTenant,
+                    DocumentId ignoredDocument,
+                    UUID ignoredRevision
+            ) {
+                return true;
+            }
+
+            @Override
+            public List<RetrievalCandidate> retainActive(
+                    TenantId ignoredTenant,
+                    List<RetrievalCandidate> candidates
+            ) {
+                return candidates.stream()
+                        .filter(candidate -> activeRevision.equals(candidate.revisionId()))
+                        .toList();
+            }
+        };
+        MilvusVectorIndex index = new MilvusVectorIndex(client, prefix, 8, activeOnly);
+        index.upsert(List.of(
+                record(
+                        tenantId,
+                        spaceId,
+                        documentId,
+                        staleRevision,
+                        "stale exact vector",
+                        List.of(1.0D, 0.0D, 0.0D, 0.0D)
+                ),
+                record(
+                        tenantId,
+                        spaceId,
+                        documentId,
+                        activeRevision,
+                        "active close vector",
+                        List.of(0.9D, 0.1D, 0.0D, 0.0D)
+                )
+        ));
+
+        var result = index.search(new VectorSearchRequest(
+                new AccessScope(tenantId, Set.of(spaceId), Set.of()),
+                SPEC,
+                GENERATION,
+                Map.of(),
+                List.of(1.0D, 0.0D, 0.0D, 0.0D),
+                1
+        ));
+
+        assertEquals(1, result.size());
+        assertEquals(activeRevision, result.getFirst().revisionId());
+        assertEquals(1, result.getFirst().rank());
     }
 
     private static VectorIndexRecord record(
@@ -259,6 +379,30 @@ class MilvusVectorIndexIT {
                 chunk,
                 "Document " + content,
                 "urn:test:" + content,
+                "API",
+                "en-US",
+                100,
+                SPEC,
+                GENERATION,
+                vector
+        );
+    }
+
+    private static VectorIndexRecord record(
+            TenantId tenantId,
+            KnowledgeSpaceId spaceId,
+            String content,
+            String sourceType,
+            String language,
+            List<Double> vector
+    ) {
+        KnowledgeChunk chunk = chunk(tenantId, spaceId, content);
+        return new VectorIndexRecord(
+                chunk,
+                "Document " + content,
+                "urn:test:" + content,
+                sourceType,
+                language,
                 100,
                 SPEC,
                 GENERATION,
@@ -278,6 +422,8 @@ class MilvusVectorIndexIT {
                 chunk(tenantId, spaceId, documentId, revisionId, content),
                 "Document " + content,
                 "urn:test:" + content.replace(' ', '-'),
+                "API",
+                "en-US",
                 100,
                 SPEC,
                 GENERATION,

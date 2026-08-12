@@ -17,11 +17,13 @@ import dev.infinityknowledge.spi.access.AccessPolicy;
 import dev.infinityknowledge.spi.access.AccessScope;
 import dev.infinityknowledge.spi.access.KnowledgeAccessDeniedException;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
+import dev.infinityknowledge.spi.retrieval.Reranker;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
 import dev.infinityknowledge.spi.retrieval.Retriever;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -29,7 +31,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -76,10 +85,78 @@ class DefaultKnowledgeGatewayTest {
         assertEquals(documentId, result.evidences().getFirst().citation().documentId());
         assertTrue(result.sufficient());
         assertEquals(1, traces.size());
-        assertEquals(7, traces.getFirst().steps().size());
+        assertEquals(9, traces.getFirst().steps().size());
+        int fusionStep = stepIndex(traces.getFirst(), "RRF_FUSION");
+        int rerankStep = stepIndex(traces.getFirst(), "RERANK");
+        assertTrue(fusionStep < rerankStep);
         assertTrue(traces.getFirst().steps().stream().anyMatch(
                 step -> "ACTIVE_REVISION_GUARD".equals(step.name())
         ));
+        assertTrue(traces.getFirst().steps().stream().anyMatch(
+                step -> "RERANK".equals(step.name())
+        ));
+    }
+
+    private static int stepIndex(RetrievalTrace trace, String name) {
+        for (int index = 0; index < trace.steps().size(); index++) {
+            if (name.equals(trace.steps().get(index).name())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    @Test
+    void fusesAllChannelsBeforeApplyingRerankCandidateLimit() {
+        UUID sharedChunk = UUID.randomUUID();
+        UUID revisionId = UUID.randomUUID();
+        DocumentId documentId = DocumentId.random();
+        List<RetrievalCandidate> keyword = new ArrayList<>();
+        for (int rank = 1; rank <= 4; rank++) {
+            keyword.add(candidate(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    DocumentId.random(),
+                    RetrievalChannel.KEYWORD,
+                    rank,
+                    0.80D,
+                    TENANT
+            ));
+        }
+        keyword.add(candidate(
+                sharedChunk,
+                revisionId,
+                documentId,
+                RetrievalChannel.KEYWORD,
+                5,
+                0.90D,
+                TENANT
+        ));
+        RetrievalCandidate vector = candidate(
+                sharedChunk,
+                revisionId,
+                documentId,
+                RetrievalChannel.VECTOR,
+                1,
+                0.90D,
+                TENANT
+        );
+        DefaultKnowledgeGateway gateway = gateway(
+                List.of(
+                        retriever(RetrievalChannel.KEYWORD, keyword),
+                        retriever(RetrievalChannel.VECTOR, vector)
+                ),
+                new ArrayList<>()
+        );
+
+        EvidenceBundle result = gateway.retrieve(query("shared evidence", 1));
+
+        assertEquals(1, result.evidences().size());
+        assertEquals(sharedChunk, result.evidences().getFirst().citation().chunkId());
+        assertEquals(
+                Set.of(RetrievalChannel.KEYWORD, RetrievalChannel.VECTOR),
+                result.evidences().getFirst().channels()
+        );
     }
 
     /**
@@ -249,6 +326,248 @@ class DefaultKnowledgeGatewayTest {
         assertEquals(activeRevisionId, result.evidences().getFirst().citation().revisionId());
     }
 
+    @Test
+    void reranksOnlyAuthorizedActiveCandidates() {
+        DocumentId documentId = DocumentId.random();
+        UUID activeRevisionId = UUID.randomUUID();
+        RetrievalCandidate stale = candidate(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                documentId,
+                RetrievalChannel.KEYWORD,
+                1,
+                0.99D,
+                TENANT
+        );
+        RetrievalCandidate active = candidate(
+                UUID.randomUUID(),
+                activeRevisionId,
+                documentId,
+                RetrievalChannel.KEYWORD,
+                2,
+                0.80D,
+                TENANT
+        );
+        AtomicInteger observedCandidates = new AtomicInteger();
+        Reranker reranker = (text, candidates, limit) -> {
+            observedCandidates.set(candidates.size());
+            return List.of(candidates.getFirst());
+        };
+        DefaultKnowledgeGateway gateway = gateway(
+                (principal, requested) -> AccessScope.all(
+                        principal.tenantId(),
+                        Set.of(SPACE)
+                ),
+                guardRetaining(activeRevisionId),
+                List.of(retriever(RetrievalChannel.KEYWORD, List.of(stale, active))),
+                reranker,
+                Runnable::run,
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                new ArrayList<>()
+        );
+
+        EvidenceBundle result = gateway.retrieve(query("active revision reranking"));
+
+        assertEquals(1, observedCandidates.get());
+        assertEquals(activeRevisionId, result.evidences().getFirst().citation().revisionId());
+    }
+
+    @Test
+    void degradesToFusedOrderWhenRerankerFails() {
+        List<RetrievalTrace> traces = new ArrayList<>();
+        RetrievalCandidate candidate = candidate(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                DocumentId.random(),
+                RetrievalChannel.KEYWORD,
+                1,
+                0.80D,
+                TENANT
+        );
+        DefaultKnowledgeGateway gateway = gateway(
+                (principal, requested) -> AccessScope.all(
+                        principal.tenantId(),
+                        Set.of(SPACE)
+                ),
+                allowAllRevisions(),
+                List.of(retriever(RetrievalChannel.KEYWORD, candidate)),
+                (text, candidates, limit) -> {
+                    throw new IllegalStateException("provider failure");
+                },
+                Runnable::run,
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                traces
+        );
+
+        EvidenceBundle result = gateway.retrieve(query("reranker fallback"));
+
+        assertEquals(1, result.evidences().size());
+        assertTrue(result.warnings().contains("RERANKER_UNAVAILABLE"));
+        assertTrue(traces.getFirst().steps().stream().anyMatch(
+                step -> "RERANK".equals(step.name())
+                        && "DEGRADED".equals(step.status())
+        ));
+    }
+
+    @Test
+    void enforcesChannelTimeoutAndInterruptsRetriever() throws InterruptedException {
+        CountDownLatch interrupted = new CountDownLatch(1);
+        Retriever blocking = blockingRetriever(interrupted);
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            DefaultKnowledgeGateway gateway = gateway(
+                    (principal, requested) -> AccessScope.all(
+                            principal.tenantId(),
+                            Set.of(SPACE)
+                    ),
+                    allowAllRevisions(),
+                    List.of(blocking),
+                    Reranker.passthrough(),
+                    executor,
+                    Duration.ofSeconds(1),
+                    Duration.ofMillis(20),
+                    new ArrayList<>()
+            );
+
+            EvidenceBundle result = gateway.retrieve(query("bounded channel"));
+
+            assertTrue(result.warnings().contains("RETRIEVER_KEYWORD_TIMEOUT"));
+            assertFalse(result.warnings().contains("RETRIEVAL_DEADLINE_EXCEEDED"));
+            assertTrue(interrupted.await(1, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void enforcesRequestDeadlineAndExposesItToRetriever() throws InterruptedException {
+        CountDownLatch interrupted = new CountDownLatch(1);
+        AtomicReference<Instant> deadline = new AtomicReference<>();
+        Retriever blocking = new Retriever() {
+            @Override
+            public RetrievalChannel channel() {
+                return RetrievalChannel.KEYWORD;
+            }
+
+            @Override
+            public List<RetrievalCandidate> retrieve(RetrievalRequest request) {
+                deadline.set(request.deadline());
+                try {
+                    new CountDownLatch(1).await();
+                } catch (InterruptedException interruptedFailure) {
+                    interrupted.countDown();
+                    Thread.currentThread().interrupt();
+                }
+                return List.of();
+            }
+        };
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            DefaultKnowledgeGateway gateway = gateway(
+                    (principal, requested) -> AccessScope.all(
+                            principal.tenantId(),
+                            Set.of(SPACE)
+                    ),
+                    allowAllRevisions(),
+                    List.of(blocking),
+                    Reranker.passthrough(),
+                    executor,
+                    Duration.ofMillis(20),
+                    Duration.ofMillis(20),
+                    new ArrayList<>()
+            );
+
+            EvidenceBundle result = gateway.retrieve(query("bounded request"));
+
+            assertTrue(result.warnings().contains("RETRIEVAL_DEADLINE_EXCEEDED"));
+            assertEquals(
+                    Instant.parse("2026-07-26T00:00:00.020Z"),
+                    deadline.get()
+            );
+            assertTrue(interrupted.await(1, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void requestDeadlineAlsoBoundsRemoteReranking() throws InterruptedException {
+        CountDownLatch rerankerInterrupted = new CountDownLatch(1);
+        RetrievalCandidate candidate = candidate(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                DocumentId.random(),
+                RetrievalChannel.KEYWORD,
+                1,
+                0.8D,
+                TENANT
+        );
+        Reranker blocking = (text, candidates, limit) -> {
+            try {
+                new CountDownLatch(1).await();
+            } catch (InterruptedException interrupted) {
+                rerankerInterrupted.countDown();
+                Thread.currentThread().interrupt();
+            }
+            return candidates.stream().limit(limit).toList();
+        };
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            DefaultKnowledgeGateway gateway = gateway(
+                    (principal, requested) -> AccessScope.all(
+                            principal.tenantId(),
+                            Set.of(SPACE)
+                    ),
+                    allowAllRevisions(),
+                    List.of(retriever(RetrievalChannel.KEYWORD, candidate)),
+                    blocking,
+                    executor,
+                    Duration.ofMillis(30),
+                    Duration.ofMillis(20),
+                    new ArrayList<>()
+            );
+
+            EvidenceBundle result = gateway.retrieve(query("bounded reranker"));
+
+            assertEquals(1, result.evidences().size());
+            assertTrue(result.warnings().contains("RETRIEVAL_DEADLINE_EXCEEDED"));
+            assertTrue(result.warnings().contains("RERANKER_TIMEOUT"));
+            assertTrue(rerankerInterrupted.await(1, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void degradesWhenRetrievalExecutorIsOverloaded() {
+        Retriever keyword = retriever(
+                RetrievalChannel.KEYWORD,
+                candidate(
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        DocumentId.random(),
+                        RetrievalChannel.KEYWORD,
+                        1,
+                        0.8D,
+                        TENANT
+                )
+        );
+        Executor rejectingExecutor = command -> {
+            throw new RejectedExecutionException("queue full");
+        };
+        DefaultKnowledgeGateway gateway = gateway(
+                (principal, requested) -> AccessScope.all(
+                        principal.tenantId(),
+                        Set.of(SPACE)
+                ),
+                allowAllRevisions(),
+                List.of(keyword),
+                Reranker.passthrough(),
+                rejectingExecutor,
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                new ArrayList<>()
+        );
+
+        EvidenceBundle result = gateway.retrieve(query("overloaded retrieval"));
+
+        assertTrue(result.warnings().contains("RETRIEVER_KEYWORD_OVERLOADED"));
+        assertTrue(result.evidences().isEmpty());
+    }
+
     /**
      * 创建使用同步执行器的确定性 Gateway。
      *
@@ -296,6 +615,58 @@ class DefaultKnowledgeGatewayTest {
         );
     }
 
+    private DefaultKnowledgeGateway gateway(
+            AccessPolicy policy,
+            ActiveRevisionGuard activeRevisionGuard,
+            List<Retriever> retrievers,
+            Reranker reranker,
+            Executor executor,
+            Duration requestTimeout,
+            Duration channelTimeout,
+            List<RetrievalTrace> traces
+    ) {
+        return new DefaultKnowledgeGateway(
+                policy,
+                activeRevisionGuard,
+                new DefaultQueryAnalyzer(
+                        5,
+                        retrievers.stream()
+                                .map(Retriever::channel)
+                                .collect(java.util.stream.Collectors.toUnmodifiableSet())
+                ),
+                retrievers,
+                new ReciprocalRankFusion(60),
+                reranker,
+                new DefaultEvidenceBuilder(),
+                traces::add,
+                executor,
+                Clock.fixed(Instant.parse("2026-07-26T00:00:00Z"), ZoneOffset.UTC),
+                0.5D,
+                requestTimeout,
+                channelTimeout
+        );
+    }
+
+    private Retriever blockingRetriever(CountDownLatch interrupted) {
+        return new Retriever() {
+            @Override
+            public RetrievalChannel channel() {
+                return RetrievalChannel.KEYWORD;
+            }
+
+            @Override
+            public List<RetrievalCandidate> retrieve(RetrievalRequest request) {
+                try {
+                    new CountDownLatch(1).await();
+                } catch (InterruptedException interruptedFailure) {
+                    interrupted.countDown();
+                    Thread.currentThread().interrupt();
+                }
+                return List.of();
+            }
+        };
+    }
+
     /**
      * 创建测试查询。
      *
@@ -303,6 +674,10 @@ class DefaultKnowledgeGatewayTest {
      * @return 知识查询
      */
     private KnowledgeQuery query(String text) {
+        return query(text, 5);
+    }
+
+    private KnowledgeQuery query(String text, int topK) {
         return new KnowledgeQuery(
                 UUID.randomUUID(),
                 new PrincipalContext(
@@ -314,7 +689,7 @@ class DefaultKnowledgeGatewayTest {
                 ),
                 text,
                 Set.of(SPACE),
-                5,
+                topK,
                 Map.of()
         );
     }

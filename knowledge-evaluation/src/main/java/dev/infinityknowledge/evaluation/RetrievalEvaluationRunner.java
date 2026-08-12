@@ -31,10 +31,23 @@ public final class RetrievalEvaluationRunner {
             List<RetrievalEvaluationCase> evaluationCases,
             int topK
     ) {
+        return run(evaluationCases, topK, () -> { });
+    }
+
+    /**
+     * Runs all cases while invoking a lease guard immediately before every case.
+     * A guard failure aborts the run instead of being recorded as a case failure.
+     */
+    public RetrievalEvaluationReport run(
+            List<RetrievalEvaluationCase> evaluationCases,
+            int topK,
+            Runnable beforeCase
+    ) {
         evaluationCases = List.copyOf(Objects.requireNonNull(
                 evaluationCases,
                 "evaluationCases must not be null"
         ));
+        Objects.requireNonNull(beforeCase, "beforeCase must not be null");
         if (evaluationCases.isEmpty()) {
             throw new IllegalArgumentException("evaluationCases must not be empty");
         }
@@ -43,6 +56,7 @@ public final class RetrievalEvaluationRunner {
         }
         List<RetrievalCaseResult> results = new ArrayList<>(evaluationCases.size());
         for (RetrievalEvaluationCase evaluationCase : evaluationCases) {
+            beforeCase.run();
             results.add(runCase(evaluationCase, topK));
         }
         return new RetrievalEvaluationReport(

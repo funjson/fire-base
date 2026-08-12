@@ -20,7 +20,7 @@ export function ConnectorsPage() {
     queryFn: api.connectors,
     refetchInterval: (query) =>
       query.state.data?.some(
-        (connector) => connector.lastRunStatus === 'RUNNING',
+        (connector) => ['PENDING', 'RUNNING'].includes(connector.lastRunStatus ?? ''),
       )
         ? 3_000
         : false,
@@ -28,7 +28,8 @@ export function ConnectorsPage() {
   const spaces = useQuery({ queryKey: ['spaces'], queryFn: api.spaces })
   const recoveredRunId = connectors.data?.find(
     (connector) =>
-      connector.lastRunStatus === 'RUNNING' && connector.lastRunId,
+      ['PENDING', 'RUNNING'].includes(connector.lastRunStatus ?? '') &&
+      connector.lastRunId,
   )?.lastRunId
   const activeRunId = selectedRunId ?? recoveredRunId
   const activeRun = useQuery({
@@ -37,13 +38,13 @@ export function ConnectorsPage() {
     enabled: Boolean(activeRunId),
     refetchInterval: (query) =>
       activeRunId &&
-      (!query.state.data || query.state.data.status === 'RUNNING')
+      (!query.state.data || ['PENDING', 'RUNNING'].includes(query.state.data.status))
         ? 1_000
         : false,
   })
   const synchronizationRunning =
     Boolean(activeRunId) &&
-    (!activeRun.data || activeRun.data.status === 'RUNNING')
+    (!activeRun.data || ['PENDING', 'RUNNING'].includes(activeRun.data.status))
   const create = useMutation({
     mutationFn: api.configureObsidian,
     onSuccess: async () => {
@@ -120,7 +121,7 @@ export function ConnectorsPage() {
                     className="connector-action"
                     disabled={
                       synchronize.isPending ||
-                      connector.lastRunStatus === 'RUNNING' ||
+                      ['PENDING', 'RUNNING'].includes(connector.lastRunStatus ?? '') ||
                       synchronizationRunning
                     }
                     onClick={() => synchronize.mutate(connector.id)}
@@ -151,7 +152,7 @@ export function ConnectorsPage() {
           </strong>
           <span>
             {activeRun.data.status} · 已扫描 {activeRun.data.recordsSeen} · 已变更{' '}
-            {activeRun.data.recordsChanged}
+            {activeRun.data.recordsChanged} · 已归档 {activeRun.data.recordsDeleted}
             {activeRun.data.errorCode ? ` · ${activeRun.data.errorCode}` : ''}
           </span>
         </div>

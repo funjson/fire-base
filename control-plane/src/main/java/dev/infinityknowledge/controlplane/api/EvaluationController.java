@@ -84,6 +84,15 @@ public final class EvaluationController {
         return evaluations.start(principals.create(jwt), datasetId, request);
     }
 
+    @PostMapping("/datasets/{datasetId}/compare")
+    public EvaluationApi.RunComparison compare(
+            @PathVariable UUID datasetId,
+            @Valid @RequestBody EvaluationApi.CompareRunsRequest request,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return evaluations.compare(principals.create(jwt), datasetId, request);
+    }
+
     @GetMapping("/runs/{runId}")
     public EvaluationApi.Run run(
             @PathVariable UUID runId,

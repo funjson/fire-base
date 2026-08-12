@@ -6,6 +6,10 @@ package dev.infinityknowledge.controlplane.application;
 public final class WorkQueueSaturatedException extends IllegalStateException {
     private static final long serialVersionUID = 1L;
 
+    public WorkQueueSaturatedException(String message) {
+        super(message);
+    }
+
     public WorkQueueSaturatedException(String message, Throwable cause) {
         super(message, cause);
     }

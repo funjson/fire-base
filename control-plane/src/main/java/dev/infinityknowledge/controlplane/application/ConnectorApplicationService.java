@@ -7,8 +7,6 @@ import dev.infinityknowledge.domain.identity.PrincipalContext;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.connector.ConnectorStateStore;
 import dev.infinityknowledge.spi.connector.SourceConnectorDefinition;
-import dev.infinityknowledge.spi.connector.SourceConnectorProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -16,14 +14,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.IOException;
 import java.time.Clock;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Configures external sources and orchestrates their bounded asynchronous scans.
@@ -33,26 +26,23 @@ public class ConnectorApplicationService {
     private static final String OBSIDIAN = "OBSIDIAN";
 
     private final ConnectorStateStore state;
-    private final Map<String, SourceConnectorProvider> providers;
     private final ConnectorProperties properties;
-    private final Executor executor;
     private final Clock clock;
-    private final ConnectorSyncWorker worker;
+    private final ConnectorRunCoordinator coordinator;
 
     public ConnectorApplicationService(
             ConnectorStateStore state,
-            List<SourceConnectorProvider> providers,
             ConnectorProperties properties,
-            @Qualifier("connectorExecutor") Executor executor,
             Clock clock,
-            ConnectorSyncWorker worker
+            ConnectorRunCoordinator coordinator
     ) {
         this.state = Objects.requireNonNull(state, "state must not be null");
-        this.providers = providersByType(providers);
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
-        this.executor = Objects.requireNonNull(executor, "executor must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
-        this.worker = Objects.requireNonNull(worker, "worker must not be null");
+        this.coordinator = Objects.requireNonNull(
+                coordinator,
+                "coordinator must not be null"
+        );
     }
 
     /**
@@ -102,12 +92,16 @@ public class ConnectorApplicationService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "active connector does not exist"
                 ));
-        SourceConnectorProvider provider = provider(definition.type());
+        if (!coordinator.supports(definition.type())) {
+            throw new IllegalStateException(
+                    "no source connector provider is registered for type " + definition.type()
+            );
+        }
         UUID runId = UUID.randomUUID();
         UUID snapshotId = UUID.randomUUID();
         boolean started = state.tryStart(new ConnectorStateStore.SynchronizationRun(
                 runId,
-                principal.tenantId(),
+                principal,
                 definition.connectorId(),
                 snapshotId,
                 clock.instant()
@@ -117,19 +111,9 @@ public class ConnectorApplicationService {
                     "connector synchronization is already running"
             );
         }
-        try {
-            executor.execute(() -> worker.synchronize(
-                    principal,
-                    definition,
-                    provider,
-                    runId,
-                    snapshotId
-            ));
-        } catch (RejectedExecutionException busy) {
-            worker.fail(principal, runId, "CONNECTOR_QUEUE_FULL");
+        if (!coordinator.submit(principal.tenantId(), runId)) {
             throw new WorkQueueSaturatedException(
-                    "connector synchronization queue is full",
-                    busy
+                    "connector synchronization queue is full"
             );
         }
         return new ConnectorSyncResponse(runId, "RUNNING");
@@ -147,16 +131,6 @@ public class ConnectorApplicationService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "connector synchronization run does not exist"
                 ));
-    }
-
-    private SourceConnectorProvider provider(String type) {
-        SourceConnectorProvider provider = providers.get(normalizeType(type));
-        if (provider == null) {
-            throw new IllegalStateException(
-                    "no source connector provider is registered for type " + type
-            );
-        }
-        return provider;
     }
 
     private Path allowedVaultRoot(String rawPath) {
@@ -188,32 +162,6 @@ public class ConnectorApplicationService {
                     invalidRoot
             );
         }
-    }
-
-    private static Map<String, SourceConnectorProvider> providersByType(
-            List<SourceConnectorProvider> providers
-    ) {
-        Objects.requireNonNull(providers, "providers must not be null");
-        Map<String, SourceConnectorProvider> indexed = new LinkedHashMap<>();
-        for (SourceConnectorProvider provider : providers) {
-            Objects.requireNonNull(provider, "providers must not contain null");
-            String type = normalizeType(provider.type());
-            if (indexed.putIfAbsent(type, provider) != null) {
-                throw new IllegalStateException(
-                        "multiple source connector providers are registered for type " + type
-                );
-            }
-        }
-        return Map.copyOf(indexed);
-    }
-
-    private static String normalizeType(String type) {
-        Objects.requireNonNull(type, "connector type must not be null");
-        String normalized = type.strip().toUpperCase(Locale.ROOT);
-        if (normalized.isEmpty()) {
-            throw new IllegalArgumentException("connector type must not be blank");
-        }
-        return normalized;
     }
 
     private static void requireAdmin(PrincipalContext principal) {

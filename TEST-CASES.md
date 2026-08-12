@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档用途 | 维护前端、API、权限、检索、评测、连接器及可观测性回归用例 |
-| 当前版本 | 1.1 |
-| 基线日期 | 2026-08-09 |
+| 文档用途 | 维护前端、API、权限、富文档、检索、Graph、Wiki、评测、连接器及观测回归用例 |
+| 当前版本 | 2.0 |
+| 基线日期 | 2026-08-11 |
 | 默认前端 | `http://localhost:5173` |
 | 默认后端 | `http://localhost:8080` |
 | 默认 Keycloak | `http://localhost:8180` |
@@ -51,7 +51,9 @@
 | ENV-003 | P0 | OIDC Discovery | 访问 Realm `.well-known/openid-configuration` | HTTP 200，Issuer 与后端配置一致 |
 | ENV-004 | P1 | Elasticsearch 健康 | 查询 ES Cluster Health | 集群可用，状态非 red |
 | ENV-005 | P1 | Milvus 健康 | 查询 Milvus Health | 服务健康并可建立连接 |
-| ENV-006 | P1 | 数据库迁移 | 查看后端启动日志与 Flyway 表 | V1–V7 均已成功，应用无待执行迁移 |
+| ENV-006 | P1 | 数据库迁移 | 查看后端启动日志与 Flyway 表 | V1–V15 均已成功，应用无待执行迁移；旧库包含 RUNNING Run 时 V10 仍可升级，V15 所有权约束可收敛 |
+| ENV-007 | P0 | Keycloak 配置容器可移植性 | 在 Keycloak 健康后执行 `docker compose --profile acceptance run --rm keycloak-config` | 退出码为 0；不依赖官方镜像中未提供的额外 CLI；Client、角色、用户和 Mapper 均完成配置 |
+| ENV-008 | P1 | 后台调度隔离 | 阻塞一个 Graph projection，同时观察 Connector/Evaluation recovery | 三类轮询由至少 3 个有界 scheduler 线程执行；长投影不饿死两个恢复任务，不创建无界线程 |
 
 ## 4. 认证与授权
 
@@ -120,6 +122,7 @@
 | IDX-007 | P0 | 活动修订切换 | 新修订投影期间执行检索 | 旧修订结果被 ActiveRevisionGuard 拒绝；跨通道 generation 原子发布不在 Phase 1 范围 |
 | IDX-008 | P1 | 空间级投影重建 | 对空间调用 `/api/v1/spaces/{spaceId}/projections/rebuild` | 只为本租户、本空间的活动修订重排已启用外部通道；不重置 RUNNING Job |
 | IDX-009 | P1 | 无外部通道重建 | 默认关闭 ES/Milvus 时调用空间 rebuild | HTTP 200，返回 `jobs=0` 和空 `projectionTypes`，不返回 500 |
+| IDX-010 | P0 | 历史修订挤占召回窗口 | 为同一文档制造多版高分旧修订，再查询当前版独有内容 | ES/Milvus 依次执行 1x/2x/4x 有界 overfetch，活动修订过滤后再截断；旧修订不得令首窗误返回空结果 |
 
 ## 8. RAG 检索与 Evidence
 
@@ -162,6 +165,11 @@
 | UI-010 | P1 | Evaluation 页面 | 打开评测中心 | 数据集、Cases、Runs 和指标正常 |
 | UI-011 | P1 | API 错误呈现 | 制造 400/403/500 | 页面显示可理解错误和 requestId，不白屏 |
 | UI-012 | P1 | Token 刷新 | 页面保持超过 Token 刷新周期 | 会话继续，API 不持续 401 |
+| UI-034 | P1 | 原文件与生命周期 | 上传 PDF/DOCX，查看原文件并归档、删除、恢复 | 元数据/下载/安全预览可用；状态和乐观版本正确；非活动文档不再检索 |
+| UI-035 | P1 | 修订比较 | 为同一文档创建两个修订并打开历史 | 修订列表、活动标识、指定修订 Chunk 和双版本对照正确 |
+| UI-036 | P1 | Graph Explorer | 打开 Graph 页面并搜索关系 | 只显示当前租户/授权空间的 Edge 和 Provenance |
+| UI-037 | P1 | Wiki 管理 | 编译、送审、发布和归档页面 | 状态机、expectedVersion 和来源明细正确 |
+| UI-038 | P1 | Audit 页面 | 执行变更后打开审计页面 | 只显示当前租户变更事件，不包含 Body/Token/Query/具体 URI |
 | UI-013 | P2 | 路由刷新 | 在各二级路由刷新浏览器 | 页面可恢复，不返回服务器 404 |
 | UI-014 | P2 | 响应式布局 | 测试常见桌面及窄屏宽度 | 核心操作可用，无严重遮挡 |
 | UI-015 | P2 | 键盘与可访问性 | 使用 Tab/Enter 操作主要流程 | 焦点可见，表单有可识别 Label |
@@ -181,6 +189,8 @@
 | EVAL-008 | P1 | 重复运行 | 同数据集连续运行两次 | 产生两个独立 Run，可比较指标 |
 | EVAL-009 | P2 | 空数据集运行 | 对无 Case 数据集运行 | 拒绝运行或生成明确空结果，不永久 RUNNING |
 | EVAL-010 | P2 | 运行中刷新 | Run 执行中刷新页面 | 状态可恢复，不丢失任务 |
+| EVAL-011 | P1 | Baseline 质量门禁 | 选择同数据集两个成功 Run 并配置绝对阈值/最大回退 | 返回指标、delta、passed 和稳定 violation |
+| EVAL-012 | P0 | 重启恢复与围栏 | Run 为 PENDING/RUNNING 时重启或由第二实例竞争 | PENDING/过期租约可恢复；旧 Worker 无权提交；Case/Principal 快照不变 |
 
 ## 11. Obsidian 连接器
 
@@ -195,15 +205,20 @@
 | CONN-007 | P1 | 内容幂等 | 对未变化 Vault 重复同步 | 不创建重复修订 |
 | CONN-008 | P1 | 单文件超限 | 文件超过配置大小 | 单文件受控失败/跳过，Run 记录原因 |
 | CONN-009 | P1 | 同步失败恢复 | 同步中制造文件读取错误 | Run 失败可诊断，Checkpoint 不错误推进 |
-| CONN-010 | P2 | 删除/移动同步 | 删除或移动已同步文件后再同步 | 当前版本标记 `NOT_SUPPORTED`，不得宣称已清理索引 |
+| CONN-010 | P1 | 删除/移动同步 | 删除或移动已同步文件后再成功完成一轮全量同步 | 上轮 manifest 中缺失的文档变为 `ARCHIVED`；ActiveRevisionGuard 立即阻止各检索通道返回旧证据；移动按旧文档归档、新文档创建处理 |
 | CONN-011 | P1 | Run 状态与租户隔离 | 通过启动响应的 runId 轮询 `/api/v1/connectors/runs/{runId}`，再用其他租户查询 | 返回终态、计数、错误码和起止时间；其他租户不可见 |
+| CONN-012 | P0 | 半轮扫描失败不误删 | 第一轮同步成功，第二轮只扫描部分文件后制造解析失败或租约丢失 | 当前 manifest 与未扫描文档生命周期均不改变；暂存快照不被提升 |
+| CONN-013 | P0 | 失败快照游标隔离 | 失败轮次持久化非零游标后创建新 run/snapshot | 新 snapshot 从初始游标开始，不复用失败 snapshot 的分页位置 |
+| CONN-014 | P0 | 重启恢复与围栏 | Run 为 PENDING/RUNNING 时重启或由第二实例竞争 | PENDING/过期租约可恢复；只有有效租约可提升 Manifest/提交终态 |
+| CONN-015 | P0 | Snapshot staging 崩溃窗口 | `stageManifest` 成功但 `saveCheckpoint` 前崩溃，期间删除该文件，再由新 lease 恢复 | V14 按 lease token 幂等清理旧 staging/cursor/counters 并从头扫描；同 token 重试和旧 token 不得清新数据 |
+| CONN-016 | P0 | 批内逐记录租约围栏 | 第一条写入后让旧 Worker 失租，再由新 Worker 接管 | 每条记录写入前 heartbeat；旧 Worker 在下一条写入前停止，不提交 checkpoint/manifest/终态 |
 
 ## 12. 可观测性与错误契约
 
 | ID | 优先级 | 测试场景 | 步骤 | 预期结果 |
 |---|---:|---|---|---|
 | OBS-001 | P1 | Prometheus 认证 | 无 Token 请求 `/actuator/prometheus` | 按设计返回 401/403 |
-| OBS-002 | P1 | Prometheus 基础指标 | 管理员请求 Prometheus | HTTP 200，含 HTTP/JVM 等框架指标；检索和任务业务指标由 OBS-020 跟踪 |
+| OBS-002 | P1 | Prometheus 基础指标 | 管理员请求 Prometheus | HTTP 200，含 HTTP/JVM 和低基数检索业务指标 |
 | OBS-003 | P1 | requestId 贯通 | 发起进入应用层的带 requestId 失败请求，并单独触发安全链 401/403 | 应用层 Header、错误体和日志使用同一 ID；安全链直接响应至少保证 Header |
 | OBS-004 | P0 | 敏感数据日志 | 执行登录、写入、检索和异常流程 | 日志不包含 Token、API Key、正文和模型原始响应 |
 | OBS-005 | P1 | 500 错误格式 | 触发未预期异常 | 返回稳定错误码、requestId，无堆栈 |
@@ -216,14 +231,14 @@
 
 | ID | 能力 | 当前预期 |
 |---|---|---|
-| PLAN-001 | Neo4j Graph Retrieval | 未实现 |
-| PLAN-002 | LLM Wiki Compiler | 未实现 |
-| PLAN-003 | PDF/DOCX/HTML 结构解析 | 未实现 |
-| PLAN-004 | MinIO 原文件体系 | 未实现 |
-| PLAN-005 | 删除/ACL 跨索引原子传播 | 未完成 |
-| PLAN-006 | 生成答案忠实度与引用评测 | 未实现 |
-| PLAN-007 | 分布式 Connector 定时调度 | 未实现 |
-| PLAN-008 | OpenTelemetry 跨服务导出 | 未实现 |
+| PLAN-001 | Excel/PPT/图片 OCR | 未实现 |
+| PLAN-002 | Query Rewrite/Multi-query/父子相邻 Chunk | 未实现 |
+| PLAN-003 | Owner/有效期/保密等级/组织审核完整治理 | 未实现 |
+| PLAN-004 | Wiki Claim/Link/Diff/回滚/影响分析/自动重编译 | 未实现 |
+| PLAN-005 | Graph 人工标注集和 Entity/Relation/Provenance 指标 | 未实现 |
+| PLAN-006 | 最终答案生成、忠实度与引用完整性评测 | 未实现 |
+| PLAN-007 | 第二个真实 Connector、定时源发现与通用市场 | 未实现 |
+| PLAN-008 | 配额/限流、备份恢复、HA、完整 SLO/告警和跨服务 OTel | 未实现 |
 
 ## 14. 缺陷记录模板
 
@@ -246,7 +261,7 @@
 
 ## 15. 本轮审计新增回归用例
 
-这些用例来自 2026-08-03～2026-08-09 的实际验收与代码审计，后续修复对应
+这些用例来自 2026-08-03～2026-08-11 的实际验收与代码审计，后续修复对应
 缺陷时应优先自动化。
 
 ### 15.1 身份、修订与投影一致性
@@ -258,16 +273,17 @@
 | CONS-003 | P0 | 并发修订号分配 | 并发写入同一文档的不同内容 | 修订号唯一且顺序确定，无唯一键冲突、500 或活动版本丢失 |
 | CONS-004 | P0 | ES 投影逆序完成 | 让新修订 B 先于旧修订 A 完成，再让 A 完成 | 旧任务不得覆盖/删除 B；检索守卫只返回当前活动修订 B，物理旧投影清理由后续对账负责 |
 | CONS-005 | P0 | Milvus 旧修订隔离 | 文档 A→B 更新后分别搜索 A、B 独有语义 | 只返回当前活动修订 B，A 的向量不可见 |
-| CONS-006 | P2 | 归档/删除后的全通道对账（后续） | 索引文档后归档或删除 | Phase 1 尚无完整生命周期 API 和跨存储对账，记录为 `NOT_SUPPORTED`；实现后所有通道均不得返回其证据 |
+| CONS-006 | P0 | 归档/删除后的全通道拒绝 | 索引文档后归档或删除 | Keyword/Vector/Graph/Page 均不得返回其证据；管理面仍可按权限查看保留修订/原文件 |
 | CONS-007 | P0 | ACL 变更跨索引传播 | 先授权检索，再撤权 | 所有检索通道立即或在有界窗口内停止返回该知识 |
 | CONS-008 | P1 | 后启 Adapter 历史回填 | 在 ES/Milvus 关闭时写入文档，再启用 Adapter | 系统提供可观测的回填/重建流程，历史文档最终可从新通道检索 |
-| CONS-009 | P2 | 投影租约续期与围栏（后续） | 单任务执行时间超过租约，存在多个 Worker | Phase 1 记录为已知 A-006；实现后过期 Worker 无权提交 |
-| CONS-010 | P1 | 跨通道过滤契约 | 使用 Phase 1 支持的 `sourceType`、`language` | PostgreSQL/ES 执行相同语义；Milvus 明确降级并返回 Warning，不静默忽略 |
+| CONS-009 | P0 | 投影租约 Heartbeat 与围栏 | 单任务执行时间接近/超过租约，存在多个 Worker | Heartbeat 延长租约；过期 Worker 的 complete/fail 被拒绝 |
+| CONS-010 | P1 | 跨通道过滤契约 | 使用 Phase 1 支持的 `sourceType`、`language` | PostgreSQL、Elasticsearch、Milvus 均执行相同的精确匹配，只返回同时满足过滤条件的候选 |
 | CONS-011 | P0 | 同正文投影元数据更新 | 保持正文不变，仅修改标题、来源 URI、权威等级或元数据 | 复用原修订但重新排队外部投影；Citation 与排序字段最终为新值 |
 | CONS-012 | P0 | 归档文档同正文恢复 | 归档当前文档后，以相同正文重新发布 | 文档恢复 ACTIVE，复用原修订并重新排队投影 |
 | CONS-013 | P0 | 修订完整指纹 | 保持正文不变，改变 language 或 parser/chunker 处理契约，并验证 media type 规范化 | 真正的处理契约变化创建独立修订；Markdown media type 大小写变体不创建伪修订 |
 | CONS-014 | P1 | 文档版本与时间单调 | 只改投影元数据，再执行 A→B→A 历史恢复 | 每次有效聚合变更只递增一次 version；`updated_at` 不倒退 |
-| CONS-015 | P2 | RUNNING 投影期间元数据变更（后续） | Worker 读取旧元数据后更新同修订文档字段 | Phase 1 记录为 A-006 围栏缺口；实现后必须至少再次投影到最新元数据 |
+| CONS-015 | P0 | RUNNING 投影期间元数据变更 | Worker 读取旧元数据后更新同修订文档字段 | Job 标记 dirty/requeue，本轮结束后至少再次投影到最新元数据 |
+| CONS-016 | P0 | Graph 旧边不可作为路径桥梁 | 第一跳命中活动边，第二跳只存在归档/删除/旧修订边，第三跳仍有活动边 | 管理查询和 Graph RAG 每跳先过滤活动修订；不得跨过旧边返回第三跳关系 |
 
 ### 15.2 鉴权、租户与 HTTP 契约
 
@@ -279,11 +295,12 @@
 | AUTH-023 | P1 | 系统主体约束 | 普通公开 Client 注入 `system_principal` 声明 | 不获得系统权限；仅受控服务 Client 可成为系统主体 |
 | AUTH-024 | P1 | 缺少必需 Claim | 使用缺少 `tenant_id` 或 `sub` 的 Token | HTTP 401，而不是普通业务参数 400 |
 | AUTH-025 | P1 | 角色与用户配置升级 | 对已有 Keycloak 数据卷应用新版 Realm 配置 | Client、角色、用户、mapper 均幂等收敛，不依赖删除数据卷 |
+| AUTH-026 | P0 | 协议 Mapper 幂等收敛 | 对同一已有数据卷连续执行两次 `keycloak-config`，再分别获取 Admin/Reader Token | Console/CLI 各只有一份 `tenant-id`、`departments`、`api-audience`；Token 含正确 tenant、department、API audience 和角色 |
 | API-015 | P0 | 管理文档列表过滤组合 | 分别使用无过滤、仅 space、仅 status、两者同时请求 | 所有合法组合均 200，分页总数准确，不因 NULL 参数产生 500 |
 | API-016 | P1 | requestId 单一来源 | 带合法/非法 requestId 请求检索和错误接口 | 所有响应 Header 使用规范化 ID；应用层检索响应、`ApiError`、Trace、MDC 复用该值；安全过滤链 401/403 只断言 Header |
-| API-017 | P1 | HTTP DTO 稳定性 | 校验 Controller DTO 单元测试与实际 JSON 响应 | ID 为约定标量；字段名（如 `generatedAt`）与前端类型一致；OpenAPI 生成不作为 Phase 1 前置条件 |
+| API-017 | P1 | HTTP DTO 稳定性 | 校验 Controller DTO、OpenAPI 与实际 JSON 响应 | ID 为约定标量；字段名（如 `generatedAt`）与前端类型/OpenAPI 一致 |
 | API-018 | P0 | 来源 URI 协议白名单 | 写入 `javascript:`、`data:`、`file:` 及合法业务 URI | 危险协议在写入或响应映射前被拒绝；前端只渲染批准协议 |
-| API-019 | P1 | Connector single-flight | 同一 Connector 已有 RUNNING Run 时再次启动 | 返回 409 和 `OPERATION_IN_PROGRESS` |
+| API-019 | P1 | Connector single-flight | 同一 Connector 已有 PENDING/RUNNING Run 时再次启动 | 返回 409 和 `OPERATION_IN_PROGRESS` |
 | API-020 | P1 | 后台队列饱和 | 填满 Connector/Evaluation 有界执行队列后提交任务 | 返回 503 和 `WORK_QUEUE_SATURATED`，不泄露内部异常 |
 | API-021 | P1 | Overview 投影统计 | 分别创建 PENDING、RETRY、RUNNING、SUCCEEDED、DEAD Job 后查询总览 | “处理中”统计前三种非终态，“死信”只统计 DEAD，不引用不存在状态 |
 | API-022 | P1 | Markdown metadata 边界 | 提交空键/空值、超长键值或超过 64 项 metadata | HTTP 400 且不进入领域/存储层，不返回 500 |
@@ -298,7 +315,7 @@
 | UI-022 | P1 | 源码与构建产物一致性 | 构建后检查 Client ID、API 地址和版本指纹 | `dist` 与当前源码配置一致，不包含旧端口或旧 Client |
 | UI-023 | P1 | 文档超过 100 条分页 | 创建至少 101 个文档并浏览列表 | 可访问全部文档；total、offset/page 和筛选正确 |
 | UI-024 | P1 | Dashboard 部分接口失败 | 仅让 spaces/traces 请求失败 | 不显示伪造的 0/空数据；显示局部错误、重试和 requestId |
-| UI-025 | P1 | 投影状态与重建 | 制造 DEAD projection，打开文档抽屉并从空间页触发 rebuild | 页面显示 Keyword/Vector 汇总、逐 Job attempt/错误与重建结果；仅 DEAD 任务提供精确 retry |
+| UI-025 | P1 | 投影状态与重建 | 制造 DEAD projection，打开文档抽屉并从空间页触发 rebuild | 页面显示 Keyword/Vector/Graph 汇总、逐 Job attempt/错误与重建结果；仅 DEAD 任务提供精确 retry |
 | UI-026 | P1 | Connector 长任务轮询 | 连接器同步持续超过 2 秒 | 页面持续轮询到终态；刷新页面后可恢复；运行中不可重复启动 |
 | UI-027 | P1 | Evaluation 运行与结果展示 | 自定义 Run Top K 后运行评测并打开 Run 详情 | 展示 Hit Rate/Recall/MRR/nDCG、Case 结果数/耗时/状态/error；有 traceId 时可深链到对应 Trace |
 | UI-028 | P1 | Evaluation 空目标校验 | 创建既无目标文档又无目标 Chunk 的 Case | 前端提交前阻止并给出说明；绕过前端调用 API 仍返回 400 和稳定错误契约 |
@@ -312,10 +329,50 @@
 
 | ID | 优先级 | 测试场景 | 步骤 | 预期结果 |
 |---|---:|---|---|---|
-| OBS-020 | P2 | 业务指标完整性（后续） | 执行检索、投影、连接器和评测成功/失败流程 | 在基础 Actuator/Prometheus 之上增加有界基数的队列、通道和运行指标 |
+| OBS-020 | P1 | 检索业务指标与基数 | 执行成功、降级、超时检索并查看 Prometheus | 指标记录总耗时/结果/通道状态；Label 不含 document/user/trace 等高基数值 |
+| OBS-021 | P1 | 变更审计 | 执行成功/失败的 POST/PATCH/DELETE 并查询审计 API | 当前租户可分页查看 route pattern、主体、状态、耗时；不存 Body/Token/Query/具体 URI |
 | CONN-020 | P0 | Windows Junction/符号链接越界 | 在白名单目录内放置指向外部的 Junction/符号链接并同步 | 通过真实路径校验拒绝越界，避免 TOCTOU |
 | CONN-021 | P1 | 同一连接器并发同步 | 并发发起两次同步 | 只有一个有效 RUNNING Run；其他请求返回 409 |
-| CONN-022 | P2 | 连接器运行恢复（后续） | Run 创建为 RUNNING 后立即重启服务 | Phase 1 记录为不支持；实现后任务继续或明确失败，不永久挂起 |
-| EVAL-020 | P2 | 评测运行恢复（后续） | Run 创建为 RUNNING 后立即重启服务 | Phase 1 记录为不支持；实现后任务继续或明确失败，不永久挂起 |
+| CONN-022 | P0 | 连接器运行恢复 | Run 创建为 PENDING/RUNNING 后立即重启服务 | PENDING/过期租约被低频恢复器接管，不永久挂起；旧 Worker 无权提交 |
+| EVAL-020 | P0 | 评测运行恢复 | Run 创建为 PENDING/RUNNING 后立即重启服务 | PENDING/过期租约被低频恢复器接管，持久化 Case/Principal 快照不丢失 |
 | BUILD-001 | P1 | Milvus 模块独立契约测试 | 单独执行 `store-milvus` 真实集成测试 | 类路径完整，无 `LoggerFactory` 等传递依赖缺失 |
-| BUILD-002 | P1 | 默认构建与外部契约边界 | 执行默认 `verify`，再用显式环境开关执行外部 IT | 默认构建明确标注跳过项；外部 IT 覆盖 PG/ES/Milvus/GLM 并生成独立报告 |
+| BUILD-002 | P1 | 默认构建与外部契约边界 | 执行默认 `verify`，再用显式环境开关执行外部 IT | 默认构建明确标注跳过项；外部 IT 覆盖 PG/ES/Milvus/MinIO/Neo4j/GLM 并生成独立报告 |
+
+## 16. P2 知识层新增回归用例
+
+这些用例已经进入当前实现范围，但当前报告不默认标记为 PASS；最终验收必须按
+真实外部环境和浏览器执行。
+
+### 16.1 富文档、原文件和生命周期
+
+| ID | 优先级 | 测试场景 | 步骤 | 预期结果 |
+|---|---:|---|---|---|
+| ASSET-001 | P0 | 文件类型与真实解析 | 分别上传 TXT/HTML/PDF/DOCX | 生成 Document/Revision/Element/Chunk，标题/文本可检索，原文件可授权下载 |
+| ASSET-002 | P0 | 解析资源预算 | 上传超限 PDF、ZIP Bomb 型 DOCX、超页数/Element 文档 | 受控 400/413，不 OOM、不写入半成品事实 |
+| ASSET-003 | P0 | 原文件 ACL 与租户 | Admin、授权 Reader、未授权 Reader、其他租户读取 source | 仅授权主体可读；响应不暴露 Bucket/Object Key |
+| ASSET-004 | P1 | 安全预览 | 对安全/不安全媒体类型请求 `inline=true` | 安全类型带 sandbox/nosniff/no-store；其他类型强制 attachment |
+| ASSET-005 | P0 | 生命周期并发 | 使用正确/错误 expectedVersion 归档、删除和恢复 | 正确版本原子转换；冲突 409；版本和时间单调 |
+| ASSET-006 | P1 | 修订历史 | 创建多修订并查询指定 Revision Chunk | 历史不可变、active 标记唯一、跨文档 revisionId 被拒绝 |
+
+### 16.2 Graph 与 Wiki
+
+| ID | 优先级 | 测试场景 | 步骤 | 预期结果 |
+|---|---:|---|---|---|
+| GRAPH-001 | P0 | Graph 投影幂等与来源 | 对同一活动修订重复投影 | Entity/Relation 不重复；每条边有 tenant/space/document/revision/chunk Provenance |
+| GRAPH-002 | P0 | Graph 租户/ACL/活动修订 | 跨租户、撤权、A→B、归档后做关系查询 | 旧/越权关系不进入管理结果或 Evidence |
+| GRAPH-003 | P1 | 图查询预算和注入 | maxHops 0/4、limit 0/201，并在 query 中放 Cypher 片段 | 非法预算 400；用户文本不作为 Cypher 执行 |
+| GRAPH-004 | P1 | Graph 混合召回 | 用“依赖/调用/影响”问题查询 | 规划 Graph 通道并与 Keyword/Vector 融合，Citation 回到原 Chunk |
+| WIKI-001 | P0 | 来源边界 | 使用其他租户、其他空间、旧修订或错误 Chunk 编译 | 请求被拒绝，不生成跨界页面 |
+| WIKI-002 | P0 | 状态机与乐观版本 | 编译、送审、驳回、发布、归档并制造版本冲突 | 仅合法转换成功；冲突 409；未发布页面不参与检索 |
+| WIKI-003 | P0 | Published Page Evidence | 发布页面后查询，再归档来源文档 | 返回活动原始 Chunk；来源非活动后页面不再产生 Evidence |
+| WIKI-004 | P1 | 生成模式边界 | 默认模式和显式 GLM 模式分别编译 | 默认不调用外网；GLM 失败受控；source coverage/版本可追溯 |
+
+### 16.3 评测、Agent 契约与 E2E
+
+| ID | 优先级 | 测试场景 | 步骤 | 预期结果 |
+|---|---:|---|---|---|
+| AGENT-001 | P0 | Java Client 契约 | 使用 Mock/真实 API 调用 `KnowledgeSearchTool` | Token、requestId、timeout、错误码和 Evidence DTO 映射稳定 |
+| AGENT-002 | P1 | OpenAPI 一致性 | 校验 `docs/openapi.yaml` 并与运行响应比对 | 路径、状态码和核心 Schema 与实现一致 |
+| E2E-001 | P0 | Admin 主路径 | 单 Worker Playwright 登录并完成空间、文件、检索、Wiki/Graph/Evaluation/Audit | 无白屏；关键 API/页面断言通过；失败保留截图/Trace |
+| E2E-002 | P0 | Reader 权限路径 | Reader 登录并遍历导航、检索、原文件访问 | 仅可见授权能力；管理路由和跨空间数据不可见 |
+| E2E-003 | P1 | 不自动启服 | 在服务未启动时运行 Playwright list/test | `--list` 不启服务；test 明确失败而不拉起 Docker/Java/浏览器下载 |

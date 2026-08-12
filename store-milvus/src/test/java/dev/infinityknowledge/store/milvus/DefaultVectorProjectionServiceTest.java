@@ -94,8 +94,86 @@ class DefaultVectorProjectionServiceTest {
         assertFalse(vectorIndex.upserted);
     }
 
+    @Test
+    void projectsLanguageAndSourceTypeForVectorFiltering() {
+        EmbeddingSpec spec = new EmbeddingSpec("test", "model", 2);
+        TenantId tenantId = new TenantId("tenant-a");
+        KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
+        DocumentId documentId = DocumentId.random();
+        UUID revisionId = UUID.randomUUID();
+        KnowledgeChunk chunk = new KnowledgeChunk(
+                UUID.randomUUID(),
+                tenantId,
+                spaceId,
+                documentId,
+                revisionId,
+                List.of(UUID.randomUUID()),
+                0,
+                List.of("Test"),
+                "content",
+                "hash",
+                Map.of()
+        );
+        KnowledgeDocument document = new KnowledgeDocument(
+                documentId,
+                tenantId,
+                spaceId,
+                "Document",
+                new SourceDescriptor(
+                        "obsidian",
+                        SourceType.OBSIDIAN,
+                        "document",
+                        "obsidian://document",
+                        Map.of()
+                ),
+                DocumentStatus.ACTIVE,
+                90,
+                Map.of("language", "zh-CN"),
+                Instant.parse("2026-08-03T00:00:00Z"),
+                Instant.parse("2026-08-03T00:00:00Z")
+        );
+        RecordingVectorIndex vectorIndex = new RecordingVectorIndex();
+        DefaultVectorProjectionService service = new DefaultVectorProjectionService(
+                (texts, ignoredSpec) -> List.of(
+                        new EmbeddingVector(0, List.of(1.0D, 0.0D))
+                ),
+                spec,
+                "generation-b",
+                vectorIndex,
+                allowAllRevisions()
+        );
+
+        service.project(document, List.of(chunk));
+
+        VectorIndexRecord record = vectorIndex.records.getFirst();
+        assertEquals("OBSIDIAN", record.sourceType());
+        assertEquals("zh-CN", record.language());
+    }
+
+    private static ActiveRevisionGuard allowAllRevisions() {
+        return new ActiveRevisionGuard() {
+            @Override
+            public boolean isActive(
+                    TenantId tenantId,
+                    DocumentId documentId,
+                    UUID revisionId
+            ) {
+                return true;
+            }
+
+            @Override
+            public List<RetrievalCandidate> retainActive(
+                    TenantId tenantId,
+                    List<RetrievalCandidate> candidates
+            ) {
+                return List.copyOf(candidates);
+            }
+        };
+    }
+
     private static final class RecordingVectorIndex implements VectorIndex {
         private boolean upserted;
+        private List<VectorIndexRecord> records = List.of();
 
         @Override
         public void ensureGeneration(EmbeddingSpec spec, String generation) {
@@ -104,6 +182,7 @@ class DefaultVectorProjectionServiceTest {
         @Override
         public void upsert(List<VectorIndexRecord> records) {
             upserted = true;
+            this.records = List.copyOf(records);
         }
 
         @Override

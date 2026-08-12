@@ -1,6 +1,8 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.identity.TenantId;
+import dev.infinityknowledge.domain.identity.PrincipalContext;
+import dev.infinityknowledge.domain.identity.PrincipalId;
 import dev.infinityknowledge.evaluation.EvaluationStore;
 import dev.infinityknowledge.evaluation.RetrievalCaseResult;
 import dev.infinityknowledge.evaluation.RetrievalEvaluationReport;
@@ -97,7 +99,7 @@ class PostgresEvaluationStoreIT {
         store.createRun(tenant, new EvaluationStore.Run(
                 runId,
                 datasetId,
-                "RUNNING",
+                "PENDING",
                 1,
                 0,
                 Map.of("topK", 8, "runtime", "knowledge-gateway"),
@@ -107,7 +109,12 @@ class PostgresEvaluationStoreIT {
                 startedAt,
                 null,
                 List.of()
-        ));
+        ), principal(tenant), List.of(caseId));
+        var lease = store.claim(
+                tenant, runId, "worker-a", startedAt.plusSeconds(30), startedAt
+        ).orElseThrow();
+        assertEquals("admin-1", lease.principal().principalId().value());
+        assertEquals(List.of(caseId), lease.caseIds());
         UUID traceId = UUID.randomUUID();
         var report = new RetrievalEvaluationReport(
                 1,
@@ -123,7 +130,7 @@ class PostgresEvaluationStoreIT {
                 ))
         );
         Instant completedAt = startedAt.plusSeconds(5L);
-        store.completeRun(tenant, runId, report, completedAt);
+        assertTrue(store.completeRun(lease, report, completedAt));
 
         var storedCase = store.evaluationCase(tenant, caseId).orElseThrow();
         assertEquals(evaluationCase, storedCase);
@@ -142,12 +149,11 @@ class PostgresEvaluationStoreIT {
         assertTrue(store.dataset(new TenantId("tenant-b"), datasetId).isEmpty());
         assertTrue(store.run(new TenantId("tenant-b"), runId, true).isEmpty());
 
-        store.failRun(
-                tenant,
-                runId,
+        assertFalse(store.failRun(
+                lease,
                 "LATE_FAILURE",
                 completedAt.plusSeconds(1L)
-        );
+        ));
         assertEquals(
                 "SUCCEEDED",
                 store.run(tenant, runId, false).orElseThrow().status()
@@ -160,17 +166,66 @@ class PostgresEvaluationStoreIT {
         Instant now = Instant.parse("2026-08-03T02:00:00Z");
         UUID datasetId = UUID.randomUUID();
         store.createDataset(tenant, datasetId, "failure-path", "", now);
+        UUID caseId = UUID.randomUUID();
+        store.createCase(tenant, new EvaluationStore.Case(
+                caseId, datasetId, "failure", Set.of(), Set.of(UUID.randomUUID()),
+                Set.of(), 8, Map.of(), now
+        ));
         UUID runId = UUID.randomUUID();
         store.createRun(tenant, new EvaluationStore.Run(
-                runId, datasetId, "RUNNING", 0, 0,
+                runId, datasetId, "PENDING", 1, 0,
                 Map.of(), Map.of(), "admin-1", null, now, null, List.of()
-        ));
+        ), principal(tenant), List.of(caseId));
+        var lease = store.claim(
+                tenant, runId, "worker-a", now.plusSeconds(30), now
+        ).orElseThrow();
 
-        store.failRun(tenant, runId, "EVALUATION_RUN_FAILED", now.plusSeconds(1L));
+        assertTrue(store.failRun(
+                lease, "EVALUATION_RUN_FAILED", now.plusSeconds(1L)
+        ));
 
         var failed = store.run(tenant, runId, false).orElseThrow();
         assertEquals("FAILED", failed.status());
         assertEquals("EVALUATION_RUN_FAILED", failed.errorCode());
         assertFalse(failed.results().iterator().hasNext());
+    }
+
+    @Test
+    void reclaimsExpiredEvaluationAndFencesOldWorker() {
+        TenantId tenant = new TenantId("tenant-a");
+        Instant now = Instant.parse("2026-08-03T03:00:00Z");
+        UUID datasetId = UUID.randomUUID();
+        UUID caseId = UUID.randomUUID();
+        store.createDataset(tenant, datasetId, "lease-recovery", "", now);
+        store.createCase(tenant, new EvaluationStore.Case(
+                caseId, datasetId, "lease", Set.of(), Set.of(UUID.randomUUID()),
+                Set.of(), 8, Map.of(), now
+        ));
+        UUID runId = UUID.randomUUID();
+        store.createRun(tenant, new EvaluationStore.Run(
+                runId, datasetId, "PENDING", 1, 0, Map.of("topK", 8),
+                Map.of(), "admin-1", null, now, null, List.of()
+        ), principal(tenant), List.of(caseId));
+
+        var stale = store.claim(
+                tenant, runId, "worker-a", now.plusSeconds(5), now
+        ).orElseThrow();
+        var current = store.claim(
+                tenant, runId, "worker-b", now.plusSeconds(40), now.plusSeconds(6)
+        ).orElseThrow();
+
+        assertTrue(current.leaseToken() > stale.leaseToken());
+        assertFalse(store.heartbeat(stale, now.plusSeconds(50), now.plusSeconds(7)));
+        assertTrue(store.heartbeat(current, now.plusSeconds(50), now.plusSeconds(7)));
+    }
+
+    private static PrincipalContext principal(TenantId tenantId) {
+        return new PrincipalContext(
+                tenantId,
+                new PrincipalId("admin-1"),
+                Set.of("knowledge-admin"),
+                Set.of("engineering"),
+                false
+        );
     }
 }

@@ -22,7 +22,11 @@ import {
   Panel,
   StatusBadge,
 } from '../components/State'
-import type { EvaluationCaseInput, EvaluationRun } from '../lib/api'
+import type {
+  EvaluationCaseInput,
+  EvaluationRun,
+  EvaluationRunComparison,
+} from '../lib/api'
 import { useApi } from '../lib/use-api'
 
 export function EvaluationsPage() {
@@ -54,14 +58,18 @@ export function EvaluationsPage() {
     queryFn: () => api.runs(activeDatasetId),
     enabled: Boolean(activeDatasetId),
     refetchInterval: (query) =>
-      query.state.data?.some((run) => run.status === 'RUNNING') ? 3_000 : false,
+      query.state.data?.some((run) => ['PENDING', 'RUNNING'].includes(run.status))
+        ? 3_000
+        : false,
   })
   const runDetail = useQuery({
     queryKey: ['evaluation-run', selectedRunId],
     queryFn: () => api.run(selectedRunId!),
     enabled: Boolean(selectedRunId),
     refetchInterval: (query) =>
-      query.state.data?.status === 'RUNNING' ? 2_000 : false,
+      query.state.data && ['PENDING', 'RUNNING'].includes(query.state.data.status)
+        ? 2_000
+        : false,
   })
   const createDataset = useMutation({
     mutationFn: api.createDataset,
@@ -268,6 +276,12 @@ export function EvaluationsPage() {
               </Panel>
             </div>
 
+            <ComparisonPanel
+              key={activeDatasetId}
+              datasetId={activeDatasetId}
+              runs={runs.data ?? []}
+            />
+
             {runMutationBelongsToActive && startRun.error && (
               <ErrorState error={startRun.error} />
             )}
@@ -330,6 +344,172 @@ export function EvaluationsPage() {
             onSubmit={createCase.mutate}
           />
         </Modal>
+      )}
+    </div>
+  )
+}
+
+function ComparisonPanel({
+  datasetId,
+  runs,
+}: {
+  datasetId: string
+  runs: EvaluationRun[]
+}) {
+  const api = useApi()
+  const successfulRuns = runs.filter((run) => run.status === 'SUCCEEDED')
+  const [baselineSelection, setBaselineSelection] = useState('')
+  const [candidateSelection, setCandidateSelection] = useState('')
+  const candidateRunId = successfulRuns.some(
+    (run) => run.id === candidateSelection,
+  )
+    ? candidateSelection
+    : (successfulRuns[0]?.id ?? '')
+  const baselineRunId = successfulRuns.some(
+    (run) => run.id === baselineSelection && run.id !== candidateRunId,
+  )
+    ? baselineSelection
+    : (successfulRuns.find((run) => run.id !== candidateRunId)?.id ?? '')
+  const comparison = useMutation({
+    mutationFn: (body: Parameters<typeof api.compareRuns>[1]) =>
+      api.compareRuns(datasetId, body),
+  })
+
+  return (
+    <Panel
+      title="基线对比与质量门禁"
+      description="比较两个已完成运行；所有检索指标均为越高越好。"
+    >
+      {successfulRuns.length < 2 ? (
+        <div className="inline-empty">至少需要两个成功运行才能建立质量基线。</div>
+      ) : (
+        <form
+          className="evaluation-gate-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const values = new FormData(event.currentTarget)
+            comparison.mutate({
+              baselineRunId,
+              candidateRunId,
+              minimumHitRate: optionalPercent(values.get('minimumHitRate')),
+              minimumRecallAtK: optionalPercent(values.get('minimumRecallAtK')),
+              minimumMrr: optionalPercent(values.get('minimumMrr')),
+              minimumNdcgAtK: optionalPercent(values.get('minimumNdcgAtK')),
+              maximumRegression:
+                optionalPercent(values.get('maximumRegression')) ?? 0,
+            })
+          }}
+        >
+          <div className="evaluation-gate-grid">
+            <label>
+              基线运行
+              <select
+                value={baselineRunId}
+                onChange={(event) => setBaselineSelection(event.target.value)}
+              >
+                {successfulRuns.map((run) => (
+                  <option key={run.id} value={run.id}>
+                    {formatRunOption(run)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              候选运行
+              <select
+                value={candidateRunId}
+                onChange={(event) => setCandidateSelection(event.target.value)}
+              >
+                {successfulRuns.map((run) => (
+                  <option key={run.id} value={run.id}>
+                    {formatRunOption(run)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <GateNumber name="minimumHitRate" label="最低 Hit Rate %" />
+            <GateNumber name="minimumRecallAtK" label="最低 Recall@K %" />
+            <GateNumber name="minimumMrr" label="最低 MRR %" />
+            <GateNumber name="minimumNdcgAtK" label="最低 nDCG@K %" />
+            <GateNumber
+              name="maximumRegression"
+              label="最大允许回退 %"
+              defaultValue={2}
+              required
+            />
+          </div>
+          <div className="form-actions evaluation-gate-actions">
+            <button
+              className="primary-button"
+              disabled={
+                comparison.isPending ||
+                !baselineRunId ||
+                !candidateRunId ||
+                baselineRunId === candidateRunId
+              }
+            >
+              {comparison.isPending ? '对比中…' : '执行质量门禁'}
+            </button>
+          </div>
+          {comparison.error && <ErrorState error={comparison.error} />}
+          {comparison.data && <ComparisonResult value={comparison.data} />}
+        </form>
+      )}
+    </Panel>
+  )
+}
+
+function GateNumber({
+  name,
+  label,
+  defaultValue,
+  required = false,
+}: {
+  name: string
+  label: string
+  defaultValue?: number
+  required?: boolean
+}) {
+  return (
+    <label>
+      {label}
+      <input
+        name={name}
+        type="number"
+        min={0}
+        max={100}
+        step="0.1"
+        defaultValue={defaultValue}
+        required={required}
+        placeholder={required ? undefined : '不限制'}
+      />
+    </label>
+  )
+}
+
+function ComparisonResult({ value }: { value: EvaluationRunComparison }) {
+  return (
+    <div className={`evaluation-gate-result ${value.passed ? 'passed' : 'failed'}`}>
+      <div>
+        <StatusBadge value={value.passed ? 'PASSED' : 'FAILED'} />
+        <strong>{value.passed ? '候选运行通过质量门禁' : '候选运行未通过质量门禁'}</strong>
+      </div>
+      <div className="evaluation-gate-deltas">
+        {Object.entries(value.deltas).map(([metricName, delta]) => (
+          <span key={metricName}>
+            {metricName} {signedPercentage(delta)}
+          </span>
+        ))}
+      </div>
+      {value.violations.length > 0 && (
+        <ul>
+          {value.violations.map((violation, index) => (
+            <li key={`${violation.metric}-${violation.rule}-${index}`}>
+              {violation.metric} · {violation.rule}：实际{' '}
+              {percentage(violation.actual)}，门槛 {percentage(violation.expected)}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )
@@ -529,6 +709,21 @@ function splitIds(value: FormDataEntryValue | null) {
     .split(/[\s,]+/)
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function optionalPercent(value: FormDataEntryValue | null) {
+  const normalized = String(value ?? '').trim()
+  if (!normalized) return null
+  return Number(normalized) / 100
+}
+
+function signedPercentage(value: number) {
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${(value * 100).toFixed(1)}%`
+}
+
+function formatRunOption(run: EvaluationRun) {
+  return `${formatTime(run.startedAt)} · ${run.id.slice(0, 8)} · MRR ${percentage(metric(run, 'mrr'))}`
 }
 
 function percentage(value: number | undefined) {

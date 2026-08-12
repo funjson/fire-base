@@ -30,7 +30,7 @@ public record EmbeddingProperties(
     public EmbeddingProperties {
         provider = defaultText(provider, "zhipu");
         model = defaultText(model, "embedding-3");
-        generation = defaultText(generation, "v1");
+        generation = defaultText(generation, "v2");
         endpoint = endpoint == null
                 ? URI.create("https://open.bigmodel.cn/api/paas/v4/embeddings")
                 : endpoint;

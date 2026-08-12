@@ -1,13 +1,10 @@
 package dev.infinityknowledge.controlplane.application;
 
 import dev.infinityknowledge.controlplane.api.EvaluationApi;
-import dev.infinityknowledge.domain.evidence.EvidenceBundle;
 import dev.infinityknowledge.domain.identity.PrincipalContext;
 import dev.infinityknowledge.domain.identity.PrincipalId;
 import dev.infinityknowledge.domain.identity.TenantId;
-import dev.infinityknowledge.domain.retrieval.KnowledgeQuery;
 import dev.infinityknowledge.evaluation.EvaluationStore;
-import dev.infinityknowledge.spi.KnowledgeGateway;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
 
@@ -19,10 +16,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -37,7 +34,6 @@ class EvaluationApplicationServiceTest {
     @Test
     void createsDatasetThroughStoreWithNormalizedInput() {
         EvaluationStore store = mock(EvaluationStore.class);
-        KnowledgeGateway gateway = mock(KnowledgeGateway.class);
         var expected = new EvaluationStore.Dataset(
                 UUID.randomUUID(), "baseline", "nightly", 1L,
                 "DRAFT", 0L, 0L, NOW
@@ -49,7 +45,7 @@ class EvaluationApplicationServiceTest {
                 eq("nightly"),
                 eq(NOW)
         )).thenReturn(expected);
-        var service = service(store, gateway, Runnable::run);
+        var service = service(store, mock(EvaluationRunCoordinator.class));
 
         var value = service.createDataset(
                 admin(),
@@ -64,11 +60,10 @@ class EvaluationApplicationServiceTest {
     @Test
     void executesRunAndPersistsReportThroughStore() {
         EvaluationStore store = mock(EvaluationStore.class);
-        KnowledgeGateway gateway = mock(KnowledgeGateway.class);
+        EvaluationRunCoordinator coordinator = mock(EvaluationRunCoordinator.class);
         UUID datasetId = UUID.randomUUID();
         UUID caseId = UUID.randomUUID();
         UUID documentId = UUID.randomUUID();
-        UUID runId = UUID.randomUUID();
         var dataset = new EvaluationStore.Dataset(
                 datasetId, "baseline", "", 1L, "DRAFT", 1L, 0L, NOW
         );
@@ -80,7 +75,12 @@ class EvaluationApplicationServiceTest {
                 .thenReturn(Optional.of(dataset));
         when(store.cases(new TenantId("tenant-a"), datasetId))
                 .thenReturn(List.of(evaluationCase));
-        when(store.createRun(eq(new TenantId("tenant-a")), any(EvaluationStore.Run.class)))
+        when(store.createRun(
+                eq(new TenantId("tenant-a")),
+                any(EvaluationStore.Run.class),
+                eq(admin()),
+                any()
+        ))
                 .thenAnswer(invocation -> invocation.getArgument(1));
         when(store.run(eq(new TenantId("tenant-a")), any(UUID.class), eq(false)))
                 .thenAnswer(invocation -> Optional.of(new EvaluationStore.Run(
@@ -88,53 +88,105 @@ class EvaluationApplicationServiceTest {
                         Map.of("topK", 8), Map.of(), "admin-1", null,
                         NOW, null, List.of()
                 )));
-        when(gateway.retrieve(any(KnowledgeQuery.class))).thenAnswer(invocation -> {
-            KnowledgeQuery query = invocation.getArgument(0);
-            return new EvidenceBundle(
-                    query.requestId(), UUID.randomUUID(), query.principal().tenantId(),
-                    List.of(), false, List.of(), NOW
-            );
-        });
-        var service = service(store, gateway, Runnable::run);
+        when(coordinator.submit(eq(new TenantId("tenant-a")), any())).thenReturn(true);
+        var service = service(store, coordinator);
 
         var run = service.start(
                 admin(), datasetId, new EvaluationApi.StartRunRequest(8, Map.of())
         );
 
         assertEquals("RUNNING", run.status());
-        verify(store).completeRun(
-                eq(new TenantId("tenant-a")),
-                any(UUID.class),
-                any(),
-                eq(NOW)
-        );
-        verify(store, never()).failRun(any(), any(), any(), any());
+        verify(coordinator).submit(eq(new TenantId("tenant-a")), any(UUID.class));
     }
 
     @Test
     void rejectsNonAdminBeforeUsingStore() {
         EvaluationStore store = mock(EvaluationStore.class);
-        var service = service(store, mock(KnowledgeGateway.class), Runnable::run);
+        var service = service(store, mock(EvaluationRunCoordinator.class));
 
         assertThrows(AccessDeniedException.class, () -> service.datasets(reader()));
 
         verify(store, never()).datasets(any());
     }
 
+    @Test
+    void comparesCompletedRunsAndReportsThresholdAndRegressionViolations() {
+        EvaluationStore store = mock(EvaluationStore.class);
+        UUID datasetId = UUID.randomUUID();
+        UUID baselineId = UUID.randomUUID();
+        UUID candidateId = UUID.randomUUID();
+        when(store.dataset(new TenantId("tenant-a"), datasetId)).thenReturn(Optional.of(
+                new EvaluationStore.Dataset(
+                        datasetId, "baseline", "", 1L, "DRAFT", 1, 2, NOW
+                )
+        ));
+        when(store.run(new TenantId("tenant-a"), baselineId, false))
+                .thenReturn(Optional.of(completedRun(
+                        baselineId, datasetId, 0.9D, 0.8D, 0.7D, 0.6D
+                )));
+        when(store.run(new TenantId("tenant-a"), candidateId, false))
+                .thenReturn(Optional.of(completedRun(
+                        candidateId, datasetId, 0.91D, 0.75D, 0.69D, 0.62D
+                )));
+        var service = service(store, mock(EvaluationRunCoordinator.class));
+
+        var comparison = service.compare(
+                admin(),
+                datasetId,
+                new EvaluationApi.CompareRunsRequest(
+                        baselineId, candidateId, 0.9D, 0.76D,
+                        0.65D, 0.6D, 0.02D
+                )
+        );
+
+        assertFalse(comparison.passed());
+        assertEquals(-0.05D, comparison.deltas().get("recallAtK"), 0.000_001D);
+        assertEquals(2, comparison.violations().size());
+        assertEquals(
+                Set.of("MINIMUM", "MAXIMUM_REGRESSION"),
+                comparison.violations().stream()
+                        .map(EvaluationApi.GateViolation::rule)
+                        .collect(java.util.stream.Collectors.toSet())
+        );
+    }
+
+    private static EvaluationStore.Run completedRun(
+            UUID id,
+            UUID datasetId,
+            double hitRate,
+            double recall,
+            double mrr,
+            double ndcg
+    ) {
+        return new EvaluationStore.Run(
+                id,
+                datasetId,
+                "SUCCEEDED",
+                1,
+                0,
+                Map.of("topK", 8),
+                Map.of(
+                        "hitRate", hitRate,
+                        "recallAtK", recall,
+                        "mrr", mrr,
+                        "ndcgAtK", ndcg
+                ),
+                "admin-1",
+                null,
+                NOW,
+                NOW,
+                List.of()
+        );
+    }
+
     private static EvaluationApplicationService service(
             EvaluationStore store,
-            KnowledgeGateway gateway,
-            Executor executor
+            EvaluationRunCoordinator coordinator
     ) {
         return new EvaluationApplicationService(
                 store,
                 Clock.fixed(NOW, ZoneOffset.UTC),
-                executor,
-                new EvaluationRunWorker(
-                        store,
-                        gateway,
-                        Clock.fixed(NOW, ZoneOffset.UTC)
-                )
+                coordinator
         );
     }
 

@@ -35,7 +35,8 @@ import java.util.stream.Stream;
  * 将本地 Obsidian Vault 读取为可对账的 Markdown 知识源快照。
  *
  * <p>连接器不跟随符号链接，并忽略 `.obsidian` 等配置目录。每轮同步按相对路径排序分页；
- * Runtime 当前依据 externalId 与内容哈希幂等 upsert 新增和修改；Phase 1 尚不进行移动/删除对账。</p>
+ * Runtime 依据 externalId 与内容哈希幂等 upsert，并在完整快照成功后对账删除；
+ * 路径移动按旧文档归档与新文档创建处理。</p>
  */
 public final class ObsidianVaultConnector implements SourceConnector {
     private static final Pattern WIKI_LINK = Pattern.compile(

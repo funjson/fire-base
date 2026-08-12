@@ -14,6 +14,7 @@ public record ConnectorRunResponse(
         String status,
         long recordsSeen,
         long recordsChanged,
+        long recordsDeleted,
         String errorCode,
         Instant startedAt,
         Instant completedAt
@@ -27,6 +28,7 @@ public record ConnectorRunResponse(
                 status.status(),
                 status.recordsSeen(),
                 status.recordsChanged(),
+                status.recordsDeleted(),
                 status.errorCode(),
                 status.startedAt(),
                 status.completedAt()

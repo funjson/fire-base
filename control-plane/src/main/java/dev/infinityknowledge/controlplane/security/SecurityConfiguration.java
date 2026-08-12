@@ -9,6 +9,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -32,7 +33,8 @@ public class SecurityConfiguration {
     @Bean
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
-            PrincipalProvisioningFilter principalProvisioningFilter
+            PrincipalProvisioningFilter principalProvisioningFilter,
+            MutationAuditFilter mutationAuditFilter
     ) throws Exception {
         http.csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
@@ -45,10 +47,25 @@ public class SecurityConfiguration {
                 )
                 .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()))
                 .addFilterAfter(
-                        principalProvisioningFilter,
+                        mutationAuditFilter,
                         BearerTokenAuthenticationFilter.class
+                )
+                .addFilterAfter(
+                        principalProvisioningFilter,
+                        MutationAuditFilter.class
                 );
         return http.build();
+    }
+
+    /** The audit filter belongs to the authenticated security chain, not the servlet chain. */
+    @Bean
+    FilterRegistrationBean<MutationAuditFilter> mutationAuditFilterRegistration(
+            MutationAuditFilter filter
+    ) {
+        FilterRegistrationBean<MutationAuditFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     /**

@@ -38,6 +38,11 @@
         </dependency>
         <dependency>
             <groupId>dev.infinityknowledge</groupId>
+            <artifactId>knowledge-compiler</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
             <artifactId>connector-obsidian</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -59,6 +64,16 @@
         <dependency>
             <groupId>dev.infinityknowledge</groupId>
             <artifactId>store-elasticsearch</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
+            <artifactId>store-neo4j</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
+            <artifactId>store-minio</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

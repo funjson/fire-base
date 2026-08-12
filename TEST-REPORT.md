@@ -1,195 +1,139 @@
-# Infinity Knowledge Runtime Phase 1 测试报告
+# Infinity Knowledge Runtime P1/P2 测试报告
 
-> 日期：2026-08-09  
-> 测试依据：[TEST-CASES.md](TEST-CASES.md)  
-> 当前用途：记录整改前基线、修复状态、分片验证证据和最终验收缺口
+> 更新日期：2026-08-11
+>
+> 分支：`codex/p1-p2-knowledge-layer`
+>
+> 结论：P1 可靠性整改与 P2 知识层在本地受控验收环境通过；该结论不代表生产 HA、容量或灾备验收完成。
 
-## 1. 当前结论
+## 1. 验收口径
 
-整改前黑盒与代码审计发现的 F-001～F-010 均已有对应代码修复；本轮静态复核
-新增的 F-011～F-018 也已完成代码整改。文档身份、
-A→B→A、活动修订投影保护、文档管理查询、ACL/Reader、稳定 DTO/requestId、
-Obsidian 实路径、Strict Hybrid、Connector Provider/Run 和 Evaluation Store
-已进入共享源码。
+- `PASS`：本轮在最终工作树或对应真实组件上实际执行并通过。
+- `PASS_WITH_TRACE`：首轮发现测试夹具或等待策略问题，修正后使用同一业务断言回归通过；保留首轮轨迹。
+- `NOT_SUPPORTED`：当前版本没有实现。
+- `DEFERRED`：已实现或已有基础，但生产化、容量或跨系统验收不在本轮范围。
 
-本轮较早的子任务曾分别通过 PostgreSQL、Elasticsearch、Milvus 分片验证，
-前端 Lint 和 TypeScript 编译也曾通过，但中央活动修订校验、V7 修订指纹、
-文档投影详情与评测页面等最终改动合并后，尚未在本报告中执行一次新的全量
-Maven、前端 Build 和浏览器/API 冒烟。因此
-当前结论是：
+本报告中的“验收通过”仅指单机 Docker、本地 Chrome、单 Worker、低 CPU 策略下的第一阶段验收。它不能外推为跨区域 HA、生产容量或长期稳定性结论。
 
-> **代码整改已完成，分片验证通过；Phase 1 等待合并后最终验收，不宣称生产就绪。**
+## 2. 验收环境
 
-## 2. 整改前基线
-
-整改前运行中系统已确认：
-
-- Admin 可以通过 Keycloak 登录；
-- 可以创建空间、写入 Markdown、生成 Element/Chunk；
-- PostgreSQL 检索可以返回 Evidence/Citation/Trace；
-- 管理控制台、Connector 和 Evaluation 基础页面存在；
-- Dataset/Case/Run 可以产出 Recall@K、MRR、nDCG。
-
-同时发现：
-
-- 相同 `externalId` 跨空间污染文档身份；
-- A→B→A 不会恢复历史修订；
-- 文档列表合法过滤组合返回 500；
-- Reader/ACL、requestId、URI 和混合运行配置不闭环；
-- ES/Milvus 存在旧修订投影风险；
-- Control Plane 直接 SQL 和具体 Connector 构造偏离模块边界。
-
-原黑盒环境状态只代表整改前快照，不应作为整改后运行结果复用。
-
-## 3. 缺陷修复矩阵
-
-状态说明：
-
-- `TARGETED_VERIFIED`：对应自动化分片已实际通过；
-- `FIXED_CODE`：实现已合入，仍需合并后全量或浏览器验证；
-- `PENDING_RUNTIME`：需要运行中系统复测。
-
-| 缺陷 | 原问题 | 当前状态 | 证据/待验证 |
-|---|---|---|---|
-| F-001 | 相同外部 ID 跨空间污染 | `TARGETED_VERIFIED` | 空间级 Connector、完整 Source Key、V5 迁移；PG IT 通过 |
-| F-002 | A→B→A 不恢复、并发修订号风险 | `TARGETED_VERIFIED` | 历史修订激活、行锁内分配；PG IT 通过 |
-| F-003 | 文档列表合法过滤组合 500 | `TARGETED_VERIFIED` | 动态 WHERE、分页读模型；管理 Store 5 个 PG IT 通过 |
-| F-004 | HTTP/Bundle requestId 不一致 | `TARGETED_VERIFIED` | 入口单一 UUID；Filter/DTO 单元测试分片通过 |
-| F-005 | 危险来源 URI 可写入/点击 | `FIXED_CODE` | 配置化后端协议白名单和前端独立安全渲染；最新后端单元测试待全量复跑 |
-| F-006 | Reader 和 ACL 无法验收 | `FIXED_CODE` / `PENDING_RUNTIME` | Principal 入驻、ACL API、可访问空间、Reader 导航；PG 治理 2 IT 通过，浏览器待验 |
-| F-007 | localhost/127/CORS/OIDC 不一致 | `FIXED_CODE` / `PENDING_RUNTIME` | 5173 dev/preview、双 Origin、幂等 Keycloak 配置；登录矩阵待验 |
-| F-008 | 实际运行不是 Hybrid | `FIXED_CODE` / `PENDING_RUNTIME` | `acceptance` Strict Hybrid + fail-fast；需真实 GLM/ES/Milvus 启动复测 |
-| F-009 | Milvus 模块真实 IT 类路径失败 | `TARGETED_VERIFIED` | 直接 SLF4J 依赖；真实 IT 2 通过、同组 1 条条件跳过 |
-| F-010 | 未知前端路由白屏 | `FIXED_CODE` | 404 和 Error Boundary；Lint/TypeScript 通过，Vite 打包受沙箱限制 |
-| F-011 | 总览使用不存在的 `LEASED` 投影状态 | `FIXED_CODE` | 改为统计 PENDING/RETRY/RUNNING；PostgreSQL 回归用例已补、待复跑 |
-| F-012 | 同正文元数据变化或归档恢复不重建投影 | `FIXED_CODE` | Writer 识别投影字段变化和归档状态，复用修订并重排投影；PG 用例已补、待复跑 |
-| F-013 | 同正文但语言/处理契约变化复用旧修订 | `FIXED_CODE` | V7 完整修订指纹、确定性 Revision ID 与 PostgreSQL 回归用例已补；待复跑 |
-| F-014 | 关闭 ES/Milvus 时空间重建返回 500 | `FIXED_CODE` | 无外部通道返回 `jobs=0`/空类型，单元用例已补；待复跑 |
-| F-015 | 元数据更新不递增版本、历史回放使更新时间倒退 | `FIXED_CODE` | 聚合 version 单次递增、`GREATEST` 保证时间单调；PG 用例已补、待复跑 |
-| F-016 | 投影重试会命中历史修订的同类型 DEAD Job | `FIXED_CODE` | 状态查询和 retry 均收紧到当前活动修订；PG 回归用例已补、待复跑 |
-| F-017 | 文档投影重试状态会串到其他文档抽屉 | `FIXED_CODE` | pending/error 按 documentId 归属，重试期间禁用重复提交；前端待复跑 |
-| F-018 | 异步评测 Run 会覆盖其他数据集的选中详情 | `FIXED_CODE` | Run 选择绑定 datasetId，成功回调按请求数据集刷新；前端待复跑 |
-
-## 4. 架构整改验证
-
-| 范围 | 结果 |
+| 项目 | 实际配置 |
 |---|---|
-| 管理 SQL 下沉 | `KnowledgeAdministrationStore` + PostgreSQL Adapter |
-| 治理 SQL 下沉 | `KnowledgeGovernanceStore` + PostgreSQL Adapter |
-| Evaluation SQL 下沉 | `EvaluationStore` + PostgreSQL Adapter |
-| Connector SQL 下沉 | `ConnectorStateStore` + PostgreSQL Adapter |
-| Connector 扩展 | `SourceConnectorProvider`，应用层不直接构造 Obsidian |
-| 稳定查询契约 | `KnowledgeQueryResponse` 将 Value Object 映射为标量 |
-| 活动修订事实 | `ActiveRevisionGuard` 用于 Worker 和检索结果 |
-| 历史回填入口 | 按空间 Projection Rebuild API/控制台操作 |
+| 日期 | 2026-08-11 |
+| 构建策略 | Maven `-T1`；不重复 `clean`，不执行压力测试 |
+| 基础设施 | PostgreSQL、Keycloak、MinIO、Milvus、Elasticsearch、Neo4j、etcd |
+| API | `http://localhost:8080`，健康检查和业务 API 返回 HTTP 200 |
+| Console | `http://localhost:5173`，返回 HTTP 200 |
+| 身份 | Keycloak realm `infinity-knowledge`，Admin/Reader 两类用户 |
+| 浏览器 | 通过 `E2E_BROWSER_CHANNEL=chrome` 复用本机 Chrome |
+| E2E 并发 | Playwright `workers=1` |
+| GLM | 使用本机 `ZHIPU_API_KEY`；通过 `127.0.0.1:7890` 代理执行单次真实 Embedding 合约 |
 
-代码扫描结果应满足：
+## 3. 静态、构建与单元门禁
 
-```text
-control-plane/application
-  - 不包含 JdbcTemplate / TransactionTemplate
-  - 不包含 SQL
-  - 不包含 new ObsidianVaultConnector(...)
-```
+| 门禁 | 结果 | 证据摘要 |
+|---|---|---|
+| `git diff --check` | PASS | 无空白错误 |
+| `mvnw.cmd -T1 test` | PASS | 最终工作树 16 个 Reactor 模块，`BUILD SUCCESS`，43.702 秒；0 failure/error，1 个 Windows symlink 条件跳过 |
+| 关键模块计数 | PASS | `control-plane` 98、`knowledge-runtime` 20、`knowledge-domain` 13、`knowledge-spi` 8，均 0 failure/error |
+| `RetrievalPropertiesTest,HybridRuntimeConfigurationTest` | PASS | Spring 配置绑定修复后 7/7 |
+| `mvnw.cmd -T1 -pl control-plane -am package -DskipTests` | PASS | 15 个 Reactor 模块打包成功 |
+| `npm.cmd run lint` | PASS | 最终前端源码 lint 通过 |
+| `npm.cmd run build` | PASS | Vite 生产构建成功 |
+| `npm.cmd run e2e:list` | PASS | 发现 2 个串行 Admin/Reader 场景 |
+| OpenAPI 静态校验 | PASS | 37 paths、43 operations，引用可解析 |
 
-完整架构状态见 [ARCHITECTURE-AUDIT.md](ARCHITECTURE-AUDIT.md)。
+完整 Maven 门禁在所有本轮改动完成后重新执行；以上不是早期定向测试结果的拼接。
 
-## 5. 已执行自动化证据
+## 4. 真实外部组件契约
 
-这些结果来自本轮整改子任务的实际运行：
+| 组件/范围 | 结果 | 实际结果 |
+|---|---|---|
+| PostgreSQL 迁移与 Store IT | PASS_WITH_TRACE | 首轮 49 个 IT 中 4 个失败，定位为测试夹具/隔离问题：时间类型绑定、V15 后必填 `principal_json`、两个全局队列顺序断言。修正夹具后，3 个失败方法及生命周期用例聚焦回归均通过；迁移测试和首轮其余 IT 已通过。该记录不表述为“一次命令 49/49 全绿” |
+| Flyway 运行迁移 | PASS | Acceptance API 启动时真实 PostgreSQL 迁移到 V15，服务健康 |
+| Elasticsearch | PASS | 真实 Adapter IT 3/3 |
+| Milvus | PASS | 真实 Adapter IT 4 个通过；1 个仅 GLM 条件用例按条件跳过 |
+| Neo4j | PASS | 真实 Adapter IT 1/1 |
+| GLM Embedding | PASS | 真实 GLM 合约 1/1 |
+| Keycloak 配置 | PASS | `keycloak-config` 连续执行 2 次均 exit 0，验证幂等性 |
+| Keycloak Claim | PASS | Admin/Reader 均验证 tenant、department、audience、role；Admin 为 admin+reader，Reader 为 reader |
 
-| 测试范围 | 结果 |
-|---|---|
-| PostgreSQL 文档/投影/管理/评测/迁移 | 17 tests，0 failure，0 error |
-| PostgreSQL 治理/ACL | 2 tests，0 failure，0 error |
-| Elasticsearch 真实 Adapter IT | 2 tests，0 failure，0 error |
-| Milvus 真实 Adapter IT | 3 tests：2 通过、1 条件跳过 |
-| Runtime/Control Plane 分片单元测试 | 相关切片通过 |
-| 前端 | 较早切片的 Lint、TypeScript 编译通过；最终 UI 改动尚未复跑，Vite 生产打包未完成 |
-| Keycloak/Acceptance 静态契约 | JSON/Compose/配置分片校验通过 |
+PostgreSQL 的真实运行库由 Flyway 升级至 V15；迁移回归测试覆盖异步历史保留和修订归属约束。任意历史脏数据组合、跨版本生产库演练仍应在正式升级前以生产备份副本执行。
 
-限制：
+## 5. API、浏览器与业务链路
 
-- GLM 真实 API IT 在现存报告中为条件跳过；
-- 分片结果发生在共享源码持续合并过程中；
-- Connector 轮询、OIDC Audience、AccessScope、中央 Active Revision Guard 和
-  最新前端变化需要最后一次全量复跑；
-- Writer 同正文投影字段/归档恢复、Overview 状态统计、配置化来源 URI 与 409/503
-  契约是在分片验证后新增，已有回归测试但尚未执行；
-- V7 完整修订指纹（正文、媒体类型、语言、处理器版本）及其后合并的改动尚未执行
-  新一轮全量验证；
-- 本报告没有停止、重启或替用户操作当前运行中的服务。
+### 5.1 Playwright
 
-## 6. 最终验收清单
+| 场景 | 结果 | 耗时/覆盖 |
+|---|---|---|
+| Admin 全链路 | PASS | 约 1.4 分钟；空间、文档、异步投影、Evidence/Citation、Evaluation、Wiki 编译/审核/发布/Page Evidence、Graph 投影/来源、Audit |
+| Reader ACL | PASS | 约 4.9 秒；允许的 Evidence/原文件访问、管理 API 403、管理导航隐藏 |
+| 总计 | PASS | 2/2，1 worker，总耗时 92.5 秒 |
 
-### 6.1 构建门禁
+首次 E2E 暴露的是测试同步策略问题：测试在写入后没有等待 KEYWORD/VECTOR 投影成功，且异步投影等待上限 30 秒不足。用例随后改为显式等待两类投影成功，并将投影等待上限调整为 90 秒；业务断言、ACL 断言和成功条件均未放宽。修正后 2/2 通过。
+
+若不下载 Playwright bundled Chromium，可在 PowerShell 中执行：
 
 ```powershell
-.\mvnw.cmd clean verify
-
-Set-Location knowledge-console
-npm.cmd run lint
-npm.cmd run build
+$env:E2E_BROWSER_CHANNEL = 'chrome'
+npm.cmd run e2e
 ```
 
-### 6.2 外部契约
+### 5.2 Obsidian 真实 Vault 对账
 
-必须分别记录：
+专用验收 Vault 的四步结果均为 `SUCCEEDED`：
 
-- PostgreSQL 全量 IT；
-- Elasticsearch 真实 IT；
-- Milvus 真实 IT；
-- GLM Embedding 真实 API IT；
-- `docker compose --profile acceptance config`；
-- Strict Hybrid 应用启动探测。
+| 步骤 | seen | changed | deleted | 结果 |
+|---|---:|---:|---:|---|
+| 首次同步 | 1 | 1 | 0 | 创建并投影文档 |
+| 无变化重扫 | 1 | 0 | 0 | 幂等，无重复修订 |
+| 删除源文件后 | 0 | 0 | 1 | 对应文档 `archived=1` |
+| 恢复源文件后 | 1 | 1 | 0 | 对应文档 `active=1` |
 
-### 6.3 浏览器/API 重点回归
+该链路验证了完整成功快照下的 manifest 提升、删除归档和恢复；进程硬崩溃、双实例抢占和超大 Vault 不在本轮运行验收范围。
 
-根目录 `TEST-CASES.md` 中所有适用于 Phase 1、且状态不是 `NOT_SUPPORTED` 的
-P0/P1 用例都属于最终门禁。以下是本轮整改的重点集合，不是对其余 P0/P1 的
-豁免：
+## 6. P1/P2 验收矩阵
 
-- AUTH-001、AUTH-002、AUTH-022～AUTH-025；
-- TENANT-004、TENANT-006～TENANT-010；
-- CONS-001～CONS-005、CONS-011～CONS-014；
-- IDX-001～IDX-009；
-- API-015～API-023；
-- RET-001～RET-003、RET-011～RET-019；
-- UI-004、UI-007、UI-010、UI-016、UI-023～UI-030、UI-032～UI-033；
-- CONN-001～CONN-009、CONN-011、CONN-020～CONN-021；
-- EVAL-001～EVAL-008。
+| 能力 | 本轮状态 | 验收证据/边界 |
+|---|---|---|
+| OIDC、多租户、角色/部门/租户 ACL | PASS | Claim 校验 + Admin/Reader Playwright；未做复杂组织树和跨租户压力测试 |
+| 不可变修订、活动修订守卫、生命周期 | PASS | 单元/Store IT、运行迁移及 E2E 活动证据链；批量物理 GC 延后 |
+| Projection heartbeat/fencing/dirty-requeue | PASS | 单元/Store 回归 + E2E 实际异步投影；双 Worker 长租约竞争延后 |
+| Deadline、通道超时、取消和有界队列 | PASS | Runtime/配置门禁；容量和饱和压力为 DEFERRED |
+| Keyword + Vector + RRF + Embedding Rerank | PASS | ES/Milvus/GLM 真实契约与 Admin E2E |
+| Graph 投影/检索/来源追溯 | PASS | Neo4j 真实 IT 与 Admin E2E；Graph 人工标注质量集未提供 |
+| Wiki 编译/审核/发布/Page Retrieval | PASS | Admin E2E；默认确定性编译，生成式 Wiki GLM 不作为本轮必选门禁 |
+| TXT/Markdown/HTML/PDF/DOCX 摄取 | PASS | Parser 单元门禁；E2E 使用 Markdown/TXT，复杂恶意 PDF/DOCX 样本集延后 |
+| MinIO 原文件授权访问 | PASS | Admin/Reader 运行链路；对象存储硬崩溃孤儿清理延后 |
+| Obsidian manifest reconcile | PASS | 创建、幂等、删除归档、恢复四步真实 Vault 验收 |
+| Retrieval Evaluation compare/gate | PASS | Admin E2E 验证运行链路；代表性企业语料的长期质量基线尚需业务侧建立 |
+| Evidence/Citation/Trace/Audit | PASS | Admin/Reader E2E；Prometheus 生产告警规则延后 |
+| Agent Java Client | PASS | 单元门禁；与外部 Infinity-Agent 仓库的端到端联调为 DEFERRED |
+| OpenAPI | PASS | 静态解析通过，并由相同 API/UI 运行链路冒烟；尚未引入自动 breaking-change gate |
 
-`CONN-022` 与 `EVAL-020` 的进程重启恢复仍为 `NOT_SUPPORTED`，不属于本阶段
-验收项；`CONN-021` 仅验收同一连接器 single-flight，不包含重启恢复。
+## 7. 未支持与延期边界
 
-只有全部适用 P0/P1 均没有回归失败，才可把 Phase 1 标记为 `ACCEPTED`。
+### NOT_SUPPORTED
 
-## 7. 明确不阻断 Phase 1 的规划边界
+- Excel、PPT、图片 OCR、通用网页爬取；
+- Query Rewrite、Multi-query、父子/相邻 Chunk 自动扩展；
+- Owner、有效期、保密等级和组织审核的完整治理；
+- Wiki Claim/Link/Diff/回滚、影响分析和自动增量重编译；
+- Graph 标注集及 Entity/Relation/Provenance 质量指标；
+- 第二个真实 Connector、通用 Connector 市场；
+- 最终答案生成及忠实度/引用完整性评测。
 
-以下能力尚未实现，本次应按 `NOT_SUPPORTED` 处理：
+### DEFERRED
 
-- Neo4j/GraphRAG；
-- LLM Wiki；
-- PDF/DOCX/HTML/Office 解析；
-- 知识原文件 MinIO 存储；
-- Connector 删除/移动对账和多实例恢复；
-- Evaluation 进程恢复；
-- 生成答案质量评测；
-- 生产 HA、完整 SLO/告警和跨区域容灾。
+- 双实例竞争、服务进程中断后的运行恢复演练；
+- 高并发、容量、长时间稳定性和资源饱和测试；
+- 配额/限流、备份恢复演练、跨区域 HA；
+- 完整 SLO/告警和跨服务 OTel；
+- 真实企业知识集的检索质量基线与发布门槛；
+- Infinity-Agent 外部仓库端到端联调。
 
-这些缺口不阻断“Phase 1 RAG 基线”验收，但阻止把当前项目描述为完整生产级
-企业知识库。
+## 8. 结论
 
-## 8. 复测结果记录模板
+> **`codex/p1-p2-knowledge-layer` 已达到 P1/P2 第一阶段本地受控验收条件：最终全量单元门禁、真实核心 Adapter、OIDC、多租户 ACL、API/UI、Admin/Reader 浏览器链路和 Obsidian 对账均已验证。**
 
-```text
-执行时间：
-代码版本/Commit：
-环境/Profile：
-用例 ID：
-结果：PASS / FAIL / BLOCKED / NOT_SUPPORTED
-requestId / traceId：
-HTTP/截图/日志证据：
-缺陷 ID：
-复测人：
-```
+该结论可以用于进入代码审查和业务数据验收，但不能宣称生产就绪或生产 HA。正式上线前仍需完成第 7 节 DEFERRED 项中与目标部署规模相关的门禁。

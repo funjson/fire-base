@@ -60,19 +60,26 @@ upsert_mapper() {
   local client_uuid="$1"
   local mapper_name="$2"
   local definition="$3"
-  local mapper_id
-  mapper_id=$("$KCADM" get "clients/$client_uuid/protocol-mappers/models" \
+  local mapper_id=""
+  local candidate_id
+  local candidate_name
+  while IFS=, read -r candidate_id candidate_name; do
+    if [[ "$candidate_name" == "$mapper_name" ]]; then
+      mapper_id="$candidate_id"
+      break
+    fi
+  done < <("$KCADM" get "clients/$client_uuid/protocol-mappers/models" \
     -r "$REALM" \
     --fields id,name \
     --format csv \
-    --noquotes |
-    awk -F, -v expected="$mapper_name" '$2 == expected { print $1; exit }')
+    --noquotes)
 
   if [[ -n "$mapper_id" ]]; then
     "$KCADM" update \
       "clients/$client_uuid/protocol-mappers/models/$mapper_id" \
       -r "$REALM" \
-      -f "$definition" >/dev/null
+      -f "$definition" \
+      --merge >/dev/null
   else
     "$KCADM" create "clients/$client_uuid/protocol-mappers/models" \
       -r "$REALM" \

@@ -18,6 +18,8 @@ import dev.infinityknowledge.spi.ingestion.KnowledgeWriteBatch;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriter;
 import dev.infinityknowledge.spi.vector.VectorProjectionService;
 import dev.infinityknowledge.spi.connector.SourceRecord;
+import dev.infinityknowledge.spi.connector.ConnectorStateStore;
+import dev.infinityknowledge.spi.connector.ConnectorWriteFence;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -118,11 +120,12 @@ public class MarkdownIngestionService {
      * @return 写入结果
      */
     public MarkdownDocumentResponse ingestSourceRecord(
-            PrincipalContext principal,
+            ConnectorStateStore.SynchronizationLease lease,
             KnowledgeSpaceId spaceId,
             SourceRecord record,
             int authority
     ) {
+        Objects.requireNonNull(lease, "lease must not be null");
         Objects.requireNonNull(record, "record must not be null");
         if (record.deleted()) {
             throw new IllegalArgumentException(
@@ -131,7 +134,7 @@ public class MarkdownIngestionService {
         }
         String language = record.metadata().getOrDefault("language", "zh-CN");
         return ingestSource(
-                principal,
+                lease.principal(),
                 spaceId,
                 record.source(),
                 record.title(),
@@ -139,7 +142,8 @@ public class MarkdownIngestionService {
                 record.mediaType(),
                 language,
                 authority,
-                record.metadata()
+                record.metadata(),
+                ConnectorWriteFence.from(lease)
         );
     }
 
@@ -156,6 +160,24 @@ public class MarkdownIngestionService {
             String language,
             int authority,
             Map<String, String> metadata
+    ) {
+        return ingestSource(
+                principal, spaceId, source, title, content, mediaType, language,
+                authority, metadata, null
+        );
+    }
+
+    private MarkdownDocumentResponse ingestSource(
+            PrincipalContext principal,
+            KnowledgeSpaceId spaceId,
+            SourceDescriptor source,
+            String title,
+            String content,
+            String mediaType,
+            String language,
+            int authority,
+            Map<String, String> metadata,
+            ConnectorWriteFence connectorWriteFence
     ) {
         requireAdmin(principal);
         if (!"text/markdown".equalsIgnoreCase(mediaType)) {
@@ -212,7 +234,9 @@ public class MarkdownIngestionService {
                 revisionId,
                 elements
         );
-        var result = writer.write(new KnowledgeWriteBatch(document, revision, elements, chunks));
+        var result = writer.write(new KnowledgeWriteBatch(
+                document, revision, elements, chunks, null, connectorWriteFence
+        ));
         String vectorStatus = "SKIPPED";
         List<String> warnings = List.of("VECTOR_PROJECTION_DISABLED");
         if (vectorProjectionService != null) {

@@ -166,11 +166,84 @@ class ElasticsearchKeywordIndexIT {
         assertTrue(result.getFirst().content().contains("ACTIVE-REVISION"));
     }
 
+    @Test
+    void overfetchesWhenAnInactiveRevisionOccupiesTheInitialKeywordWindow() {
+        TenantId tenantId = new TenantId("tenant-a");
+        KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
+        DocumentId documentId = DocumentId.random();
+        UUID staleRevision = UUID.randomUUID();
+        UUID activeRevision = UUID.randomUUID();
+        ActiveRevisionGuard activeOnly = new ActiveRevisionGuard() {
+            @Override
+            public boolean isActive(
+                    TenantId ignoredTenant,
+                    DocumentId ignoredDocument,
+                    UUID ignoredRevision
+            ) {
+                return true;
+            }
+
+            @Override
+            public List<RetrievalCandidate> retainActive(
+                    TenantId ignoredTenant,
+                    List<RetrievalCandidate> candidates
+            ) {
+                return candidates.stream()
+                        .filter(candidate -> activeRevision.equals(candidate.revisionId()))
+                        .toList();
+            }
+        };
+        ElasticsearchKeywordIndex guardedIndex = new ElasticsearchKeywordIndex(
+                httpClient,
+                JsonMapper.builder().build(),
+                new ElasticsearchConfig(endpoint, indexName, "", Duration.ofSeconds(15)),
+                activeOnly
+        );
+        guardedIndex.upsert(source(
+                tenantId,
+                spaceId,
+                documentId,
+                staleRevision,
+                "overfetch",
+                "OVERFETCH-9182 OVERFETCH-9182 OVERFETCH-9182 obsolete"
+        ));
+        guardedIndex.upsert(source(
+                tenantId,
+                spaceId,
+                documentId,
+                activeRevision,
+                "overfetch",
+                "OVERFETCH-9182 current"
+        ));
+
+        var result = guardedIndex.retrieve(request(
+                tenantId,
+                spaceId,
+                documentId,
+                "OVERFETCH-9182",
+                1
+        ));
+
+        assertEquals(1, result.size());
+        assertEquals(activeRevision, result.getFirst().revisionId());
+        assertEquals(1, result.getFirst().rank());
+    }
+
     private static RetrievalRequest request(
             TenantId tenantId,
             KnowledgeSpaceId spaceId,
             DocumentId documentId,
             String text
+    ) {
+        return request(tenantId, spaceId, documentId, text, 10);
+    }
+
+    private static RetrievalRequest request(
+            TenantId tenantId,
+            KnowledgeSpaceId spaceId,
+            DocumentId documentId,
+            String text,
+            int candidateLimit
     ) {
         PrincipalContext principal = new PrincipalContext(
                 tenantId,
@@ -193,7 +266,7 @@ class ElasticsearchKeywordIndexIT {
                         text,
                         text,
                         Set.of(RetrievalChannel.KEYWORD),
-                        10
+                        candidateLimit
                 ),
                 new AccessScope(
                         tenantId,

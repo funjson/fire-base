@@ -76,8 +76,7 @@ public final class DefaultQueryAnalyzer implements QueryAnalyzer {
                 && GRAPH_MARKERS.stream().anyMatch(lowered::contains)) {
             channels.add(RetrievalChannel.GRAPH);
         }
-        if (availableChannels.contains(RetrievalChannel.PAGE)
-                && !channels.contains(RetrievalChannel.KEYWORD)) {
+        if (availableChannels.contains(RetrievalChannel.PAGE)) {
             channels.add(RetrievalChannel.PAGE);
         }
         int candidateLimit = Math.min(1_000, query.topK() * candidateMultiplier);

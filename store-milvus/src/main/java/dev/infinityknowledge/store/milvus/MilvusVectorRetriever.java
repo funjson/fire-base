@@ -54,11 +54,6 @@ public final class MilvusVectorRetriever implements Retriever {
         if (request.accessScope().deniesAll()) {
             return List.of();
         }
-        if (!request.query().filters().isEmpty()) {
-            throw new IllegalArgumentException(
-                    "Milvus vector retrieval does not support metadata filters"
-            );
-        }
         var vector = embeddingProvider.embed(
                 List.of(request.plan().normalizedQuery()),
                 embeddingSpec
@@ -67,6 +62,7 @@ public final class MilvusVectorRetriever implements Retriever {
                 request.accessScope(),
                 embeddingSpec,
                 generation,
+                request.query().filters(),
                 vector.values(),
                 request.plan().candidateLimit()
         ));

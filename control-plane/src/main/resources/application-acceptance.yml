@@ -15,6 +15,8 @@ infinity:
   knowledge:
     retrieval:
       mode: hybrid
+      reranker:
+        enabled: ${KNOWLEDGE_RERANKER_ENABLED:true}
     embedding:
       api-key: ${ZHIPU_API_KEY}
       proxy-host: ${KNOWLEDGE_EMBEDDING_PROXY_HOST:127.0.0.1}
@@ -24,3 +26,10 @@ infinity:
     keyword:
       elasticsearch:
         enabled: true
+    graph:
+      neo4j:
+        enabled: ${KNOWLEDGE_NEO4J_ENABLED:true}
+        password: ${KNOWLEDGE_NEO4J_PASSWORD:infinity-knowledge}
+        extraction-api-key: ${ZHIPU_API_KEY}
+        proxy-host: ${KNOWLEDGE_GRAPH_PROXY_HOST:127.0.0.1}
+        proxy-port: ${KNOWLEDGE_GRAPH_PROXY_PORT:7890}

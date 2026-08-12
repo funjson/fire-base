@@ -1,89 +1,98 @@
 # 交付与验收
 
-> 更新日期：2026-08-09  
-> 当前源码直接保存在工作目录，本轮不生成新的 `dist` 分发包。根目录现存
-> `dist/` 仅包含 2026-07-26 的历史忽略产物，不代表当前源码，也不得用于本轮
-> 验收。当前合并状态以
-> [README](README.md)、[Phase 1 状态](docs/PHASE-1-STATUS.md) 和
-> [测试报告](TEST-REPORT.md) 为准；Phase 2～4 文档是历史增量快照。
+> 更新日期：2026-08-11
+> 交付方式：源码保留在当前工作目录，不生成新的 `dist` 源码包。
 
-## 当前交付
+根目录现存 `dist/` 是历史忽略产物，不代表当前源码，不得用于本次验收。当前
+交付状态以 [P1/P2 状态](docs/P1-P2-STATUS.md)、[测试报告](TEST-REPORT.md) 和
+[API](docs/API.md) 为准。
 
-当前源码包含可进入最终验收的 Phase 1 企业 RAG 基线：
+## 当前源码交付
 
 - Java 21 / Spring Boot 4.1 Maven 多模块；
-- JWT、Keycloak、多租户、用户/角色/部门 ACL；
-- Markdown 与 Obsidian 摄取；
-- PostgreSQL 元数据、修订、ACL、关键词检索和 Trace；
-- 智谱 `embedding-3`；
-- Milvus 向量写入、语义检索和租户隔离；
-- 不可混写的索引 generation、活动修订守卫和可重建投影；
-- 事务 Projection Job、租约 Worker、指数退避、死信、人工重投和空间重建；
-- 离线 Hit Rate、Recall@K、MRR、nDCG@K 评测内核；
-- Agent API `EvidenceBundle`；
-- Elasticsearch CJK/BM25、事务 KEYWORD 投影和索引内租户/ACL 过滤；
-- React/TypeScript 企业管理控制台与 OIDC PKCE 登录；
-- 持久化评测数据集、逐案例结果、失败隔离和 Trace 关联；
-- Obsidian Vault 白名单配置、异步手动同步、Run 与 Checkpoint；
-- 管理查询 API、请求关联 ID、Micrometer/Prometheus 指标；
-- Keycloak API Audience、Admin/Reader、Principal 入驻和空间 ACL；
-- 文档分页、ACL、投影重建、Connector Run 和 Evaluation 可视化管理。
+- Keycloak/OIDC、API Audience、多租户、Principal 和空间 ACL；
+- Markdown、TXT、HTML、PDF、DOCX、Obsidian 摄取；
+- PostgreSQL V1-V15 权威事实、不可变修订、生命周期和可恢复任务；
+- Elasticsearch BM25、Milvus/GLM Vector、Neo4j Graph、Published Wiki 检索；
+- MinIO 原文件、授权下载/预览；
+- Projection fencing/dirty-requeue、Connector/Evaluation 恢复和 manifest 对账；
+- Evidence/Citation/Trace、低基数指标、变更审计；
+- Retrieval Evaluation 与 baseline/candidate 质量门禁；
+- React 管理控制台、OpenAPI、Playwright 用例；
+- `knowledge-agent-client` Java Client 和 `KnowledgeSearchTool`。
 
-详细范围见：
-
-- [Phase 1 状态](docs/PHASE-1-STATUS.md)
-- [总体架构](docs/ARCHITECTURE.md)
-- [API 验收](docs/API.md)
-- [测试用例](TEST-CASES.md)
-- [架构审计](ARCHITECTURE-AUDIT.md)
+上述范围已完成第一阶段本地受控验收；这不表示生产 HA、容量、灾备或长期稳定性
+验收完成。明确延期和未支持项见 [P1/P2 状态](docs/P1-P2-STATUS.md)。
 
 ## 环境
 
 - JDK 21
 - Docker Desktop
 - PowerShell
-- 非空环境变量 `ZHIPU_API_KEY`
+- Node/npm
+- 完整 Hybrid/Graph 验收需要非空 `ZHIPU_API_KEY`
+- 本机代理可使用 `127.0.0.1:7890`
 
-## 快速验收
+## 低资源验收顺序
 
-```powershell
-docker compose --profile acceptance up -d --wait --wait-timeout 300 `
-  postgres keycloak etcd minio milvus elasticsearch
-docker compose --profile acceptance run --rm keycloak-config
-
-# 使用已有密钥；未配置时应先设置，而不是把占位值提交到源码。
-if ([string]::IsNullOrWhiteSpace($env:ZHIPU_API_KEY)) {
-  throw 'ZHIPU_API_KEY is required for the acceptance profile'
-}
-$env:KNOWLEDGE_EMBEDDING_PROXY_HOST = '127.0.0.1'
-$env:KNOWLEDGE_EMBEDDING_PROXY_PORT = '7890'
-
-.\mvnw.cmd clean verify
-.\mvnw.cmd -pl control-plane -am package
-java -jar control-plane\target\control-plane-0.1.0-SNAPSHOT.jar `
-  --spring.profiles.active=acceptance
-```
-
-随后按 `docs/API.md` 获取本地 Token、创建知识空间、写入 Markdown 并调用 Agent 查询 API。
-
-## 最终验收说明
+先执行单线程静态门禁，避免重复 `clean`：
 
 ```powershell
-.\mvnw.cmd clean verify
+.\mvnw.cmd -T1 verify
 
 Set-Location knowledge-console
 npm.cmd run lint
 npm.cmd run build
+npm.cmd run e2e:list
+Set-Location ..
 ```
 
-外部 PostgreSQL、Elasticsearch、Milvus 和 GLM 合约需按
-[Phase 1 状态](docs/PHASE-1-STATUS.md) 单独记录。本轮未启动用户服务；当前
-合并后的 Maven/Vite/浏览器验收仍待本机执行，不能用历史 Phase 报告代替。
+随后只启动一次完整环境：
 
-## Docker
+```powershell
+docker compose --profile acceptance up -d --wait --wait-timeout 300 `
+  postgres keycloak etcd minio milvus elasticsearch neo4j
+docker compose --profile acceptance run --rm keycloak-config
+
+if ([string]::IsNullOrWhiteSpace($env:ZHIPU_API_KEY)) {
+  throw 'ZHIPU_API_KEY is required'
+}
+$env:KNOWLEDGE_EMBEDDING_PROXY_HOST = '127.0.0.1'
+$env:KNOWLEDGE_EMBEDDING_PROXY_PORT = '7890'
+$env:KNOWLEDGE_GRAPH_PROXY_HOST = '127.0.0.1'
+$env:KNOWLEDGE_GRAPH_PROXY_PORT = '7890'
+
+.\mvnw.cmd -T1 -pl control-plane -am package
+java -jar control-plane\target\control-plane-0.1.0-SNAPSHOT.jar `
+  --spring.profiles.active=acceptance
+```
+
+服务已经人工启动时，按 [API](docs/API.md) 做 API 冒烟，再在
+`knowledge-console` 执行 `npm.cmd run e2e`。Playwright 不自动启动服务，固定
+`workers=1`，避免验收期间额外并发负载。若不下载 bundled Chromium，可在
+PowerShell 中先设置 `$env:E2E_BROWSER_CHANNEL='chrome'` 复用本机 Chrome；这是
+2026-08-11 本轮实测路径。
+
+## 外部契约门禁
+
+需单独记录：
+
+1. PostgreSQL V1 -> V15 升级和全新安装；
+2. Elasticsearch 真实投影/检索；
+3. Milvus 真实投影/过滤/检索；
+4. MinIO put/get/delete 与原文件 API；
+5. Neo4j 投影、活动修订清理和 traversal；
+6. GLM Embedding，以及显式启用时的 Graph/Wiki 生成；
+7. Admin/Reader/Service Principal、Connector/Evaluation 重启恢复和浏览器 E2E。
+
+2026-08-11 已执行最终 Maven 门禁、核心真实 Adapter、API/UI 冒烟、Admin/Reader
+浏览器 E2E（2/2）和 Obsidian 四步对账。详细计数与 PostgreSQL 首轮测试夹具修正
+轨迹见 [测试报告](TEST-REPORT.md)。双实例、容量、灾备和生产 HA 仍未验收。
+
+## Docker 数据
 
 ```powershell
 docker compose --profile acceptance ps
 ```
 
-命名卷默认保留数据。除非确认无需恢复，不要执行 `docker compose down -v`。
+命名卷默认保留。除非已经确认无需恢复，不要执行 `docker compose down -v`。

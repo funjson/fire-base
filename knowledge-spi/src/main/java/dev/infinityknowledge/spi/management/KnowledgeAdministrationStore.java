@@ -23,6 +23,10 @@ public interface KnowledgeAdministrationStore {
 
     List<Chunk> chunks(TenantId tenantId, UUID documentId);
 
+    List<Revision> revisions(TenantId tenantId, UUID documentId);
+
+    List<Chunk> chunks(TenantId tenantId, UUID documentId, UUID revisionId);
+
     List<Connector> connectors(TenantId tenantId);
 
     List<Trace> traces(TenantId tenantId, int limit);
@@ -74,6 +78,9 @@ public interface KnowledgeAdministrationStore {
             String keywordStatus,
             String vectorStatus,
             String graphStatus,
+            String originalFileName,
+            String sourceMediaType,
+            Long sourceContentLength,
             Instant updatedAt
     ) {
     }
@@ -99,6 +106,19 @@ public interface KnowledgeAdministrationStore {
         public Chunk {
             sectionPath = List.copyOf(sectionPath);
         }
+    }
+
+    record Revision(
+            UUID revisionId,
+            long revisionNumber,
+            String contentHash,
+            String mediaType,
+            String language,
+            String parserVersion,
+            Instant createdAt,
+            boolean active,
+            long chunkCount
+    ) {
     }
 
     record Connector(

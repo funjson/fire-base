@@ -1,6 +1,7 @@
 package dev.infinityknowledge.evaluation;
 
 import dev.infinityknowledge.domain.identity.TenantId;
+import dev.infinityknowledge.domain.identity.PrincipalContext;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,20 +37,77 @@ public interface EvaluationStore {
 
     Optional<Case> evaluationCase(TenantId tenantId, UUID caseId);
 
-    Run createRun(TenantId tenantId, Run value);
+    Run createRun(
+            TenantId tenantId,
+            Run value,
+            PrincipalContext principal,
+            List<UUID> caseIds
+    );
+
+    Optional<WorkLease> claim(
+            TenantId tenantId,
+            UUID runId,
+            String leaseOwner,
+            Instant leaseUntil,
+            Instant now
+    );
+
+    List<WorkLease> claimAvailable(
+            String leaseOwner,
+            int limit,
+            Instant leaseUntil,
+            Instant now
+    );
+
+    boolean heartbeat(WorkLease lease, Instant leaseUntil, Instant now);
 
     List<Run> runs(TenantId tenantId, UUID datasetId);
 
     Optional<Run> run(TenantId tenantId, UUID runId, boolean includeResults);
 
-    void completeRun(
-            TenantId tenantId,
-            UUID runId,
+    boolean completeRun(
+            WorkLease lease,
             RetrievalEvaluationReport report,
             Instant completedAt
     );
 
-    void failRun(TenantId tenantId, UUID runId, String errorCode, Instant completedAt);
+    boolean failRun(WorkLease lease, String errorCode, Instant completedAt);
+
+    /** Immutable ownership proof and execution snapshot for one claimed run. */
+    record WorkLease(
+            TenantId tenantId,
+            UUID runId,
+            UUID datasetId,
+            List<UUID> caseIds,
+            Map<String, Object> configuration,
+            PrincipalContext principal,
+            String leaseOwner,
+            long leaseToken,
+            Instant leaseUntil
+    ) {
+        public WorkLease {
+            Objects.requireNonNull(tenantId, "tenantId must not be null");
+            Objects.requireNonNull(runId, "runId must not be null");
+            Objects.requireNonNull(datasetId, "datasetId must not be null");
+            caseIds = List.copyOf(Objects.requireNonNull(caseIds, "caseIds must not be null"));
+            if (caseIds.isEmpty()) {
+                throw new IllegalArgumentException("caseIds must not be empty");
+            }
+            configuration = Map.copyOf(Objects.requireNonNull(
+                    configuration,
+                    "configuration must not be null"
+            ));
+            Objects.requireNonNull(principal, "principal must not be null");
+            if (!tenantId.equals(principal.tenantId())) {
+                throw new IllegalArgumentException("principal tenant must match lease tenant");
+            }
+            leaseOwner = requireText(leaseOwner, "leaseOwner");
+            if (leaseToken < 1) {
+                throw new IllegalArgumentException("leaseToken must be positive");
+            }
+            Objects.requireNonNull(leaseUntil, "leaseUntil must not be null");
+        }
+    }
 
     /** Stored dataset summary including aggregate case and run counts. */
     record Dataset(
@@ -129,5 +187,14 @@ public interface EvaluationStore {
         public CaseResult {
             Objects.requireNonNull(caseId, "caseId must not be null");
         }
+    }
+
+    private static String requireText(String value, String field) {
+        Objects.requireNonNull(value, field + " must not be null");
+        String normalized = value.strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(field + " must not be blank");
+        }
+        return normalized;
     }
 }

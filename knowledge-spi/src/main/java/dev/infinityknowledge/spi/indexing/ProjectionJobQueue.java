@@ -42,16 +42,35 @@ public interface ProjectionJobQueue {
     );
 
     /**
-     * Marks a leased job successful.
+     * Marks a leased job successful, or atomically returns it to pending when
+     * the source changed while it was running.
+     *
+     * @return {@code false} when the lease expired or its fencing token is stale
      */
-    void complete(UUID jobId, String workerId, Instant now);
+    boolean complete(UUID jobId, String workerId, long leaseToken, Instant now);
+
+    /**
+     * Extends a live lease before an external projection starts.
+     *
+     * @return {@code false} when the lease expired or its fencing token is stale
+     */
+    boolean heartbeat(
+            UUID jobId,
+            String workerId,
+            long leaseToken,
+            Instant leaseUntil,
+            Instant now
+    );
 
     /**
      * Releases a leased job for retry or moves it to the dead-letter state.
+     *
+     * @return {@code false} when the lease expired or its fencing token is stale
      */
-    void fail(
+    boolean fail(
             UUID jobId,
             String workerId,
+            long leaseToken,
             String errorCode,
             Instant availableAt,
             boolean dead,

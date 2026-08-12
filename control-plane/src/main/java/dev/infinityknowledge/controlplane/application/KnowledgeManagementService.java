@@ -87,6 +87,9 @@ public final class KnowledgeManagementService {
                         value.keywordStatus(),
                         value.vectorStatus(),
                         value.graphStatus(),
+                        value.originalFileName(),
+                        value.sourceMediaType(),
+                        value.sourceContentLength(),
                         value.updatedAt()
                 ))
                 .toList();
@@ -104,6 +107,43 @@ public final class KnowledgeManagementService {
     ) {
         requireAdmin(principal);
         return store.chunks(principal.tenantId(), documentId).stream()
+                .map(value -> new ManagementViews.Chunk(
+                        value.id(),
+                        value.ordinal(),
+                        value.sectionPath(),
+                        value.content(),
+                        value.contentHash()
+                ))
+                .toList();
+    }
+
+    public List<ManagementViews.Revision> revisions(
+            PrincipalContext principal,
+            UUID documentId
+    ) {
+        requireAdmin(principal);
+        return store.revisions(principal.tenantId(), documentId).stream()
+                .map(value -> new ManagementViews.Revision(
+                        value.revisionId(),
+                        value.revisionNumber(),
+                        value.contentHash(),
+                        value.mediaType(),
+                        value.language(),
+                        value.parserVersion(),
+                        value.createdAt(),
+                        value.active(),
+                        value.chunkCount()
+                ))
+                .toList();
+    }
+
+    public List<ManagementViews.Chunk> chunks(
+            PrincipalContext principal,
+            UUID documentId,
+            UUID revisionId
+    ) {
+        requireAdmin(principal);
+        return store.chunks(principal.tenantId(), documentId, revisionId).stream()
                 .map(value -> new ManagementViews.Chunk(
                         value.id(),
                         value.ordinal(),

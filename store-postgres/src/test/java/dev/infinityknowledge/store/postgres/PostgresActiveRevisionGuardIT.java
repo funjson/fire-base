@@ -76,7 +76,14 @@ class PostgresActiveRevisionGuardIT {
                 tenantId,
                 List.of(
                         candidate(tenantId, spaceId, documentId, staleRevision, "stale"),
-                        candidate(tenantId, spaceId, documentId, activeRevision, "active")
+                        candidate(tenantId, spaceId, documentId, activeRevision, "active"),
+                        candidate(
+                                tenantId,
+                                new KnowledgeSpaceId("foreign-space"),
+                                documentId,
+                                activeRevision,
+                                "wrong-space"
+                        )
                 )
         );
 

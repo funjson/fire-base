@@ -1,8 +1,12 @@
 package dev.infinityknowledge.controlplane.api;
 
 import dev.infinityknowledge.controlplane.application.OperationInProgressException;
+import dev.infinityknowledge.controlplane.application.KnowledgeDocumentNotFoundException;
 import dev.infinityknowledge.controlplane.application.WorkQueueSaturatedException;
+import dev.infinityknowledge.controlplane.application.GraphCapabilityUnavailableException;
 import dev.infinityknowledge.spi.access.KnowledgeAccessDeniedException;
+import dev.infinityknowledge.spi.wiki.KnowledgePageConflictException;
+import dev.infinityknowledge.spi.management.DocumentLifecycleConflictException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -11,6 +15,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,6 +78,26 @@ public final class ApiExceptionHandler {
         );
     }
 
+    /** Reports a missing active document or original object without leaking storage details. */
+    @ExceptionHandler(KnowledgeDocumentNotFoundException.class)
+    ResponseEntity<ApiError> documentNotFound(KnowledgeDocumentNotFoundException missing) {
+        return response(
+                HttpStatus.NOT_FOUND,
+                "KNOWLEDGE_DOCUMENT_NOT_FOUND",
+                "The requested authorized document source does not exist"
+        );
+    }
+
+    /** Reports multipart limits as a stable payload-too-large response. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> uploadTooLarge(MaxUploadSizeExceededException tooLarge) {
+        return response(
+                HttpStatus.CONTENT_TOO_LARGE,
+                "SOURCE_TOO_LARGE",
+                "The uploaded source exceeds the configured limit"
+        );
+    }
+
     /**
      * Reports a single-flight conflict without presenting it as an internal failure.
      */
@@ -82,6 +107,28 @@ public final class ApiExceptionHandler {
                 HttpStatus.CONFLICT,
                 "OPERATION_IN_PROGRESS",
                 "An operation for this resource is already running"
+        );
+    }
+
+    /** Reports optimistic-lock and lifecycle conflicts as a stable 409 response. */
+    @ExceptionHandler(KnowledgePageConflictException.class)
+    ResponseEntity<ApiError> knowledgePageConflict(KnowledgePageConflictException conflict) {
+        return response(
+                HttpStatus.CONFLICT,
+                "KNOWLEDGE_PAGE_CONFLICT",
+                "The knowledge page changed or cannot perform this transition"
+        );
+    }
+
+    /** Reports document optimistic-lock and invalid lifecycle transitions as 409. */
+    @ExceptionHandler(DocumentLifecycleConflictException.class)
+    ResponseEntity<ApiError> documentLifecycleConflict(
+            DocumentLifecycleConflictException conflict
+    ) {
+        return response(
+                HttpStatus.CONFLICT,
+                "DOCUMENT_LIFECYCLE_CONFLICT",
+                "The document changed or cannot perform this transition"
         );
     }
 
@@ -97,6 +144,16 @@ public final class ApiExceptionHandler {
         );
     }
 
+    /** Reports an optional graph channel that is intentionally disabled. */
+    @ExceptionHandler(GraphCapabilityUnavailableException.class)
+    ResponseEntity<ApiError> graphUnavailable(GraphCapabilityUnavailableException unavailable) {
+        return response(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "GRAPH_CAPABILITY_UNAVAILABLE",
+                "The graph capability is not enabled for this deployment"
+        );
+    }
+
     /**
      * 隐藏未知基础设施错误，同时记录关联请求标识供运维排查。
      *
@@ -105,7 +162,10 @@ public final class ApiExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiError> unexpected(Exception failure) {
-        LOGGER.error("Unhandled API failure", failure);
+        LOGGER.error(
+                "Unhandled API failure: failureType={}",
+                failure.getClass().getSimpleName()
+        );
         return response(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",

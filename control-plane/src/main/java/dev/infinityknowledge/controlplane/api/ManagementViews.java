@@ -50,6 +50,9 @@ public final class ManagementViews {
             String keywordStatus,
             String vectorStatus,
             String graphStatus,
+            String originalFileName,
+            String sourceMediaType,
+            Long sourceContentLength,
             Instant updatedAt
     ) {
     }
@@ -64,6 +67,19 @@ public final class ManagementViews {
         public Chunk {
             sectionPath = List.copyOf(sectionPath);
         }
+    }
+
+    public record Revision(
+            UUID revisionId,
+            long revisionNumber,
+            String contentHash,
+            String mediaType,
+            String language,
+            String parserVersion,
+            Instant createdAt,
+            boolean active,
+            long chunkCount
+    ) {
     }
 
     public record Connector(

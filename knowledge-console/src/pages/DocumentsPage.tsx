@@ -1,10 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Archive,
   ChevronLeft,
   ChevronRight,
+  Download,
+  Eye,
   FileText,
   Plus,
   RefreshCw,
+  RotateCcw,
+  Trash2,
+  Upload,
   X,
 } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
@@ -16,6 +22,8 @@ import {
   StatusBadge,
 } from '../components/State'
 import type {
+  Chunk,
+  DocumentRevisionView,
   DocumentView,
   MarkdownDocumentInput,
   ProjectionJob,
@@ -29,19 +37,31 @@ export function DocumentsPage() {
   const api = useApi()
   const queryClient = useQueryClient()
   const [spaceId, setSpaceId] = useState('')
+  const [status, setStatus] = useState('')
   const [offset, setOffset] = useState(0)
   const [selected, setSelected] = useState<DocumentView>()
   const [uploading, setUploading] = useState(false)
+  const [uploadingFile, setUploadingFile] = useState(false)
   const spaces = useQuery({ queryKey: ['spaces'], queryFn: api.spaces })
   const documents = useQuery({
-    queryKey: ['documents', spaceId, offset],
+    queryKey: ['documents', spaceId, status, offset],
     queryFn: () =>
-      api.documents({ spaceId: spaceId || undefined, limit: pageSize, offset }),
+      api.documents({
+        spaceId: spaceId || undefined,
+        status: status || undefined,
+        limit: pageSize,
+        offset,
+      }),
   })
   const chunks = useQuery({
     queryKey: ['chunks', selected?.id],
     queryFn: () => api.chunks(selected!.id),
     enabled: Boolean(selected),
+  })
+  const originalSource = useQuery({
+    queryKey: ['document-source', selected?.id],
+    queryFn: () => api.sourceMetadata(selected!.id),
+    enabled: Boolean(selected?.originalFileName),
   })
   const projections = useQuery({
     queryKey: ['document-projections', selected?.id],
@@ -79,6 +99,57 @@ export function DocumentsPage() {
       await queryClient.invalidateQueries({ queryKey: ['overview'] })
     },
   })
+  const fileUpload = useMutation({
+    mutationFn: api.ingestFile,
+    onSuccess: async () => {
+      setUploadingFile(false)
+      setOffset(0)
+      await queryClient.invalidateQueries({ queryKey: ['documents'] })
+      await queryClient.invalidateQueries({ queryKey: ['overview'] })
+    },
+  })
+  const sourceContent = useMutation({
+    mutationFn: ({ documentId, inline }: { documentId: string; inline: boolean }) =>
+      api.sourceContent(documentId, inline),
+    onSuccess: (blob, variables) => {
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.target = variables.inline ? '_blank' : '_self'
+      link.rel = 'noopener noreferrer'
+      if (!variables.inline) {
+        link.download = originalSource.data?.originalFileName ?? 'source'
+      }
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    },
+  })
+  const lifecycle = useMutation({
+    mutationFn: ({
+      document,
+      status,
+    }: {
+      document: DocumentView
+      status: 'ACTIVE' | 'ARCHIVED' | 'DELETED'
+    }) => api.transitionDocument(document.id, status, document.version),
+    onSuccess: async (value) => {
+      setSelected((current) =>
+        current?.id === value.documentId
+          ? {
+              ...current,
+              status: value.status,
+              version: value.version,
+              updatedAt: value.updatedAt,
+            }
+          : current,
+      )
+      await queryClient.invalidateQueries({ queryKey: ['documents'] })
+      await queryClient.invalidateQueries({ queryKey: ['overview'] })
+      await queryClient.invalidateQueries({
+        queryKey: ['document-projections', value.documentId],
+      })
+    },
+  })
 
   if (documents.isPending || spaces.isPending) return <LoadingState />
   if (documents.error || spaces.error) {
@@ -95,6 +166,9 @@ export function DocumentsPage() {
   const retryBelongsToSelected = Boolean(
     selected && retryProjection.variables?.documentId === selected.id,
   )
+  const lifecycleBelongsToSelected = Boolean(
+    selected && lifecycle.variables?.document.id === selected.id,
+  )
 
   return (
     <div className="page-stack">
@@ -104,10 +178,16 @@ export function DocumentsPage() {
           <h2>查看文档、活动修订和索引投影</h2>
           <p>点击文档可检查实际进入检索系统的 Chunk 和来源定位。</p>
         </div>
-        <button className="primary-button" onClick={() => setUploading(true)}>
-          <Plus size={17} />
-          写入 Markdown
-        </button>
+        <div className="button-row">
+          <button onClick={() => setUploading(true)}>
+            <Plus size={17} />
+            写入 Markdown
+          </button>
+          <button className="primary-button" onClick={() => setUploadingFile(true)}>
+            <Upload size={17} />
+            上传文件
+          </button>
+        </div>
       </div>
 
       <Panel>
@@ -130,6 +210,22 @@ export function DocumentsPage() {
               ))}
             </select>
           </label>
+          <label>
+            文档状态
+            <select
+              value={status}
+              onChange={(event) => {
+                setStatus(event.target.value)
+                setOffset(0)
+                setSelected(undefined)
+              }}
+            >
+              <option value="">默认（不含已删除）</option>
+              <option value="ACTIVE">活动</option>
+              <option value="ARCHIVED">已归档</option>
+              <option value="DELETED">已删除</option>
+            </select>
+          </label>
           <span className="toolbar-count">
             {documents.isFetching ? '正在刷新 · ' : ''}
             共 {documents.data.total} 篇文档
@@ -148,6 +244,7 @@ export function DocumentsPage() {
                   <th>文档</th>
                   <th>空间</th>
                   <th>来源</th>
+                  <th>状态</th>
                   <th>Chunk</th>
                   <th>关键词</th>
                   <th>向量</th>
@@ -168,7 +265,15 @@ export function DocumentsPage() {
                       </div>
                     </td>
                     <td className="mono">{document.spaceId}</td>
-                    <td>{document.sourceType}</td>
+                    <td>
+                      <div className="source-cell">
+                        <span>{document.sourceType}</span>
+                        {document.sourceMediaType && <small>{document.sourceMediaType}</small>}
+                      </div>
+                    </td>
+                    <td>
+                      <StatusBadge value={document.status} />
+                    </td>
                     <td>{document.chunkCount}</td>
                     <td>
                       <StatusBadge value={document.keywordStatus} />
@@ -230,6 +335,95 @@ export function DocumentsPage() {
               <Detail label="活动修订" value={selected.activeRevisionId?.slice(0, 8)} />
               <Detail label="Chunk" value={selected.chunkCount} />
             </div>
+            <div className="document-lifecycle-actions">
+              {selected.status === 'ACTIVE' ? (
+                <>
+                  <button
+                    disabled={lifecycle.isPending}
+                    onClick={() =>
+                      lifecycle.mutate({ document: selected, status: 'ARCHIVED' })
+                    }
+                  >
+                    <Archive size={15} />
+                    归档
+                  </button>
+                  <button
+                    className="danger-button"
+                    disabled={lifecycle.isPending}
+                    onClick={() => {
+                      if (window.confirm('确认软删除该文档？原始数据仍保留用于恢复和审计。')) {
+                        lifecycle.mutate({ document: selected, status: 'DELETED' })
+                      }
+                    }}
+                  >
+                    <Trash2 size={15} />
+                    软删除
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="primary-button"
+                  disabled={lifecycle.isPending}
+                  onClick={() =>
+                    lifecycle.mutate({ document: selected, status: 'ACTIVE' })
+                  }
+                >
+                  <RotateCcw size={15} />
+                  恢复为活动文档
+                </button>
+              )}
+            </div>
+            {lifecycleBelongsToSelected && lifecycle.error && (
+              <ErrorState error={lifecycle.error} />
+            )}
+            {selected.originalFileName && (
+              <>
+                <h3 className="section-title">原始文件</h3>
+                {originalSource.isPending && (
+                  <LoadingState label="正在读取原文元数据" />
+                )}
+                {originalSource.error && <ErrorState error={originalSource.error} />}
+                {sourceContent.error && <ErrorState error={sourceContent.error} />}
+                {originalSource.data && (
+                  <div className="source-card">
+                    <div className="detail-grid">
+                      <Detail label="文件名" value={originalSource.data.originalFileName} />
+                      <Detail label="媒体类型" value={originalSource.data.mediaType} />
+                      <Detail
+                        label="文件大小"
+                        value={formatBytes(originalSource.data.contentLength)}
+                      />
+                      <Detail
+                        label="保留时间"
+                        value={formatTime(originalSource.data.storedAt)}
+                      />
+                    </div>
+                    <div className="button-row">
+                      {originalSource.data.previewable && (
+                        <button
+                          disabled={sourceContent.isPending}
+                          onClick={() =>
+                            sourceContent.mutate({ documentId: selected.id, inline: true })
+                          }
+                        >
+                          <Eye size={15} />
+                          预览原文
+                        </button>
+                      )}
+                      <button
+                        disabled={sourceContent.isPending}
+                        onClick={() =>
+                          sourceContent.mutate({ documentId: selected.id, inline: false })
+                        }
+                      >
+                        <Download size={15} />
+                        下载原文
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
             <h3 className="section-title">外部索引投影</h3>
             {projections.isPending && <LoadingState label="正在读取投影任务" />}
             {projections.error && <ErrorState error={projections.error} />}
@@ -255,6 +449,10 @@ export function DocumentsPage() {
                 }
               />
             )}
+            <DocumentRevisionHistory
+              key={selected.id}
+              documentId={selected.id}
+            />
             <h3 className="section-title">活动修订的知识块</h3>
             {chunks.isPending && <LoadingState label="正在读取知识块" />}
             {chunks.error && <ErrorState error={chunks.error} />}
@@ -334,7 +532,279 @@ export function DocumentsPage() {
           </Panel>
         </div>
       )}
+
+      {uploadingFile && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setUploadingFile(false)
+          }}
+        >
+          <Panel className="modal" title="上传原始文件">
+            <form
+              className="form-stack"
+              onSubmit={(event) => submitFileUpload(event, fileUpload.mutate)}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <label>
+                知识空间
+                <select name="spaceId" required defaultValue={spaceId}>
+                  <option value="">请选择</option>
+                  {spaces.data.map((space) => (
+                    <option value={space.id} key={space.id}>
+                      {space.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                外部标识
+                <input name="externalId" required placeholder="handbook/oncall-pdf" />
+              </label>
+              <label>
+                标题（可选）
+                <input name="title" placeholder="未填写时使用原文件名" />
+              </label>
+              <label>
+                文件
+                <input
+                  name="file"
+                  type="file"
+                  required
+                  accept=".txt,.text,.log,.html,.htm,.xhtml,.pdf,.docx,text/plain,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                />
+              </label>
+              <p className="form-hint">
+                支持 TXT、HTML、PDF、DOCX，单文件不超过 25 MB。PDF 与 DOCX 会受到页数、解压大小和压缩比限制。
+              </p>
+              {fileUpload.error && <ErrorState error={fileUpload.error} />}
+              <div className="form-actions">
+                <button type="button" onClick={() => setUploadingFile(false)}>
+                  取消
+                </button>
+                <button className="primary-button" disabled={fileUpload.isPending}>
+                  {fileUpload.isPending ? '解析并写入中…' : '上传并写入'}
+                </button>
+              </div>
+            </form>
+          </Panel>
+        </div>
+      )}
     </div>
+  )
+}
+
+function DocumentRevisionHistory({ documentId }: { documentId: string }) {
+  const api = useApi()
+  const [leftRevisionId, setLeftRevisionId] = useState('')
+  const [rightRevisionId, setRightRevisionId] = useState('')
+  const revisions = useQuery({
+    queryKey: ['document-revisions', documentId],
+    queryFn: () => api.documentRevisions(documentId),
+  })
+  const leftChunks = useQuery({
+    queryKey: ['document-revision-chunks', documentId, leftRevisionId],
+    queryFn: () => api.revisionChunks(documentId, leftRevisionId),
+    enabled: Boolean(leftRevisionId),
+  })
+  const rightChunks = useQuery({
+    queryKey: ['document-revision-chunks', documentId, rightRevisionId],
+    queryFn: () => api.revisionChunks(documentId, rightRevisionId),
+    enabled: Boolean(rightRevisionId),
+  })
+
+  const leftRevision = revisions.data?.find(
+    (revision) => revision.revisionId === leftRevisionId,
+  )
+  const rightRevision = revisions.data?.find(
+    (revision) => revision.revisionId === rightRevisionId,
+  )
+
+  return (
+    <section>
+      <h3 className="section-title">修订历史与对比</h3>
+      {revisions.isPending && <LoadingState label="正在读取修订历史" />}
+      {revisions.error && <ErrorState error={revisions.error} />}
+      {revisions.data && !revisions.data.length && (
+        <div className="inline-empty">当前文档没有可读取的修订。</div>
+      )}
+      {revisions.data && revisions.data.length > 0 && (
+        <>
+          <div className="revision-list">
+            {revisions.data.map((revision) => (
+              <article className="revision-card" key={revision.revisionId}>
+                <div>
+                  <strong>版本 {revision.revisionNumber}</strong>
+                  {revision.active && <StatusBadge value="ACTIVE" />}
+                </div>
+                <span>
+                  {revision.mediaType} · {revision.language} · {revision.chunkCount} 个
+                  Chunk
+                </span>
+                <small>
+                  {revision.parserVersion} · {formatTime(revision.createdAt)} ·{' '}
+                  {revision.contentHash.slice(0, 16)}
+                </small>
+              </article>
+            ))}
+          </div>
+          <div className="revision-selectors">
+            <label>
+              左侧版本
+              <select
+                value={leftRevisionId}
+                onChange={(event) => setLeftRevisionId(event.target.value)}
+              >
+                <option value="">按需选择</option>
+                {revisions.data.map((revision) => (
+                  <RevisionOption revision={revision} key={revision.revisionId} />
+                ))}
+              </select>
+            </label>
+            <label>
+              右侧版本
+              <select
+                value={rightRevisionId}
+                onChange={(event) => setRightRevisionId(event.target.value)}
+              >
+                <option value="">按需选择</option>
+                {revisions.data.map((revision) => (
+                  <RevisionOption revision={revision} key={revision.revisionId} />
+                ))}
+              </select>
+            </label>
+          </div>
+          {leftRevisionId && rightRevisionId && leftRevisionId === rightRevisionId && (
+            <div className="inline-empty">请选择两个不同修订进行对比。</div>
+          )}
+          {leftRevisionId && rightRevisionId && leftRevisionId !== rightRevisionId && (
+            <>
+              {(leftChunks.isPending || rightChunks.isPending) && (
+                <LoadingState label="正在按需读取修订内容" />
+              )}
+              {(leftChunks.error || rightChunks.error) && (
+                <ErrorState error={leftChunks.error ?? rightChunks.error} />
+              )}
+              {leftRevision &&
+                rightRevision &&
+                leftChunks.data &&
+                rightChunks.data && (
+                  <RevisionComparison
+                    leftRevision={leftRevision}
+                    rightRevision={rightRevision}
+                    leftChunks={leftChunks.data}
+                    rightChunks={rightChunks.data}
+                  />
+                )}
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function RevisionOption({ revision }: { revision: DocumentRevisionView }) {
+  return (
+    <option value={revision.revisionId}>
+      版本 {revision.revisionNumber}
+      {revision.active ? '（活动）' : ''}
+    </option>
+  )
+}
+
+function RevisionComparison({
+  leftRevision,
+  rightRevision,
+  leftChunks,
+  rightChunks,
+}: {
+  leftRevision: DocumentRevisionView
+  rightRevision: DocumentRevisionView
+  leftChunks: Chunk[]
+  rightChunks: Chunk[]
+}) {
+  const leftByOrdinal = new Map(leftChunks.map((chunk) => [chunk.ordinal, chunk]))
+  const rightByOrdinal = new Map(rightChunks.map((chunk) => [chunk.ordinal, chunk]))
+  const ordinals = [...new Set([...leftByOrdinal.keys(), ...rightByOrdinal.keys()])]
+    .sort((left, right) => left - right)
+  const rows = ordinals.map((ordinal) => ({
+    ordinal,
+    left: leftByOrdinal.get(ordinal),
+    right: rightByOrdinal.get(ordinal),
+  }))
+
+  return (
+    <div className="revision-comparison">
+      <header>
+        <strong>版本 {leftRevision.revisionNumber}</strong>
+        <strong>版本 {rightRevision.revisionNumber}</strong>
+      </header>
+      {!rows.length && <div className="inline-empty">两个修订都没有 Chunk。</div>}
+      {rows.map(({ ordinal, left, right }) => {
+        const changed = left?.contentHash !== right?.contentHash
+        const leftLabel = !left
+          ? '此版无内容'
+          : !right
+            ? '右侧删除'
+            : changed
+              ? '有变化'
+              : '相同'
+        const rightLabel = !right
+          ? '此版无内容'
+          : !left
+            ? '右侧新增'
+            : changed
+              ? '有变化'
+              : '相同'
+        return (
+          <div className="revision-compare-row" key={ordinal}>
+            <RevisionChunk
+              chunk={left}
+              ordinal={ordinal}
+              changed={changed}
+              changeLabel={leftLabel}
+            />
+            <RevisionChunk
+              chunk={right}
+              ordinal={ordinal}
+              changed={changed}
+              changeLabel={rightLabel}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function RevisionChunk({
+  chunk,
+  ordinal,
+  changed,
+  changeLabel,
+}: {
+  chunk: Chunk | undefined
+  ordinal: number
+  changed: boolean
+  changeLabel: string
+}) {
+  return (
+    <article className={`revision-compare-item ${changed ? 'changed' : ''}`}>
+      <header>
+        <span>#{ordinal + 1}</span>
+        <small>{changeLabel}</small>
+      </header>
+      {chunk ? (
+        <>
+          <strong>{chunk.sectionPath.join(' / ') || '正文'}</strong>
+          <p>{chunk.content}</p>
+          <footer className="mono">{chunk.contentHash.slice(0, 16)}</footer>
+        </>
+      ) : (
+        <p className="revision-missing">此版本无对应 Chunk</p>
+      )}
+    </article>
   )
 }
 
@@ -423,6 +893,25 @@ function submitUpload(
     authority: 80,
     metadata: { source: 'console' },
   })
+}
+
+function submitFileUpload(
+  event: FormEvent<HTMLFormElement>,
+  mutate: (value: FormData) => void,
+) {
+  event.preventDefault()
+  const form = new FormData(event.currentTarget)
+  const title = String(form.get('title') ?? '').trim()
+  if (!title) form.delete('title')
+  form.set('language', 'zh-CN')
+  form.set('authority', '80')
+  mutate(form)
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function formatTime(value: string) {

@@ -9,6 +9,7 @@ import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.access.AccessScope;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.embedding.EmbeddingVector;
 import dev.infinityknowledge.spi.retrieval.QueryPlan;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
 import dev.infinityknowledge.spi.vector.VectorIndex;
@@ -21,27 +22,30 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Verifies that vector retrieval never silently ignores metadata filters.
+ * Verifies that supported metadata filters reach the vector index unchanged.
  */
 class MilvusVectorRetrieverTest {
 
     @Test
-    void rejectsMetadataFiltersBeforeCallingEmbeddingOrMilvus() {
+    void forwardsLanguageAndSourceTypeFiltersToMilvusSearch() {
         AtomicBoolean embeddingCalled = new AtomicBoolean();
+        AtomicReference<VectorSearchRequest> captured = new AtomicReference<>();
         EmbeddingSpec spec = new EmbeddingSpec("zhipu", "embedding-3", 2);
         var retriever = new MilvusVectorRetriever(
                 (texts, requestedSpec) -> {
                     embeddingCalled.set(true);
-                    throw new AssertionError("embedding must not be called");
+                    assertEquals(spec, requestedSpec);
+                    return List.of(new EmbeddingVector(0, List.of(1.0D, 0.0D)));
                 },
                 spec,
-                "v1",
-                new UnusedVectorIndex()
+                "v2",
+                new RecordingVectorIndex(captured)
         );
         TenantId tenantId = new TenantId("tenant-a");
         KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
@@ -52,13 +56,17 @@ class MilvusVectorRetrieverTest {
                 Set.of(),
                 false
         );
+        Map<String, String> filters = Map.of(
+                "language", "zh-CN",
+                "sourceType", "OBSIDIAN"
+        );
         var query = new KnowledgeQuery(
                 UUID.randomUUID(),
                 principal,
                 "Redis timeout",
                 Set.of(spaceId),
                 8,
-                Map.of("language", "zh-CN")
+                filters
         );
         var request = new RetrievalRequest(
                 query,
@@ -71,24 +79,28 @@ class MilvusVectorRetrieverTest {
                 AccessScope.all(tenantId, Set.of(spaceId))
         );
 
-        assertThrows(IllegalArgumentException.class, () -> retriever.retrieve(request));
-        assertFalse(embeddingCalled.get());
+        assertTrue(retriever.retrieve(request).isEmpty());
+
+        assertTrue(embeddingCalled.get());
+        assertEquals(filters, captured.get().filters());
     }
 
-    private static final class UnusedVectorIndex implements VectorIndex {
+    private record RecordingVectorIndex(
+            AtomicReference<VectorSearchRequest> captured
+    ) implements VectorIndex {
         @Override
         public void ensureGeneration(EmbeddingSpec spec, String generation) {
-            throw new AssertionError("Milvus must not be called");
         }
 
         @Override
         public void upsert(List<VectorIndexRecord> records) {
-            throw new AssertionError("Milvus must not be called");
+            throw new AssertionError("projection must not be called");
         }
 
         @Override
         public List<RetrievalCandidate> search(VectorSearchRequest request) {
-            throw new AssertionError("Milvus must not be called");
+            captured.set(request);
+            return List.of();
         }
     }
 }

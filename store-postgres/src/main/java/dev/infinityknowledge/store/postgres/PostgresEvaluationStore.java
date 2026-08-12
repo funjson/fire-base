@@ -1,6 +1,8 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.identity.TenantId;
+import dev.infinityknowledge.domain.identity.PrincipalContext;
+import dev.infinityknowledge.domain.identity.PrincipalId;
 import dev.infinityknowledge.evaluation.EvaluationStore;
 import dev.infinityknowledge.evaluation.RetrievalEvaluationReport;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -150,15 +152,30 @@ public final class PostgresEvaluationStore implements EvaluationStore {
     }
 
     @Override
-    public Run createRun(TenantId tenantId, Run value) {
+    public Run createRun(
+            TenantId tenantId,
+            Run value,
+            PrincipalContext principal,
+            List<UUID> caseIds
+    ) {
         requireTenant(tenantId);
         Objects.requireNonNull(value, "value must not be null");
+        Objects.requireNonNull(principal, "principal must not be null");
+        caseIds = List.copyOf(Objects.requireNonNull(caseIds, "caseIds must not be null"));
+        if (!tenantId.equals(principal.tenantId())) {
+            throw new IllegalArgumentException("principal tenant must match run tenant");
+        }
+        if (caseIds.isEmpty()) {
+            throw new IllegalArgumentException("caseIds must not be empty");
+        }
         jdbc.update("""
                 INSERT INTO evaluation_run
                     (tenant_id, id, dataset_id, generation_id, status,
                      configuration_json, metrics_json, requested_by,
-                     case_count, failed_case_count, started_at)
-                VALUES (?, ?, ?, NULL, 'RUNNING', ?::jsonb, NULL, ?, ?, 0, ?)
+                     case_count, failed_case_count, principal_json,
+                     case_ids_json, started_at)
+                VALUES (?, ?, ?, NULL, 'PENDING', ?::jsonb, NULL, ?, ?, 0,
+                        ?::jsonb, ?::jsonb, ?)
                 """,
                 tenantId.value(),
                 value.id(),
@@ -166,9 +183,110 @@ public final class PostgresEvaluationStore implements EvaluationStore {
                 json(value.configuration()),
                 value.requestedBy(),
                 value.caseCount(),
+                json(principal(principal)),
+                json(caseIds),
                 databaseTime(value.startedAt())
         );
         return value;
+    }
+
+    @Override
+    public Optional<WorkLease> claim(
+            TenantId tenantId,
+            UUID runId,
+            String leaseOwner,
+            Instant leaseUntil,
+            Instant now
+    ) {
+        requireTenant(tenantId);
+        Objects.requireNonNull(runId, "runId must not be null");
+        String owner = requireText(leaseOwner, "leaseOwner");
+        requireLeaseWindow(leaseUntil, now);
+        WorkLease lease = jdbc.query("""
+                WITH candidate AS (
+                    SELECT tenant_id, id
+                      FROM evaluation_run
+                     WHERE tenant_id = ? AND id = ?
+                       AND (status = 'PENDING'
+                            OR (status = 'RUNNING' AND lease_until < ?))
+                     FOR UPDATE SKIP LOCKED
+                ), claimed AS (
+                    UPDATE evaluation_run run
+                       SET status = 'RUNNING',
+                           lease_owner = ?,
+                           lease_token = run.lease_token + 1,
+                           lease_until = ?,
+                           error_code = NULL,
+                           completed_at = NULL
+                      FROM candidate
+                     WHERE run.tenant_id = candidate.tenant_id
+                       AND run.id = candidate.id
+                    RETURNING run.*
+                )
+                SELECT tenant_id, id, dataset_id, case_ids_json::text,
+                       configuration_json::text, principal_json::text,
+                       lease_owner, lease_token, lease_until
+                  FROM claimed
+                """, result -> result.next() ? lease(result) : null,
+                tenantId.value(), runId, databaseTime(now), owner,
+                databaseTime(leaseUntil));
+        return Optional.ofNullable(lease);
+    }
+
+    @Override
+    public List<WorkLease> claimAvailable(
+            String leaseOwner,
+            int limit,
+            Instant leaseUntil,
+            Instant now
+    ) {
+        String owner = requireText(leaseOwner, "leaseOwner");
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("limit must be between 1 and 100");
+        }
+        requireLeaseWindow(leaseUntil, now);
+        return jdbc.query("""
+                WITH candidate AS (
+                    SELECT tenant_id, id
+                      FROM evaluation_run
+                     WHERE status = 'PENDING'
+                        OR (status = 'RUNNING' AND lease_until < ?)
+                     ORDER BY started_at, tenant_id, id
+                     LIMIT ?
+                     FOR UPDATE SKIP LOCKED
+                ), claimed AS (
+                    UPDATE evaluation_run run
+                       SET status = 'RUNNING',
+                           lease_owner = ?,
+                           lease_token = run.lease_token + 1,
+                           lease_until = ?,
+                           error_code = NULL,
+                           completed_at = NULL
+                      FROM candidate
+                     WHERE run.tenant_id = candidate.tenant_id
+                       AND run.id = candidate.id
+                    RETURNING run.*
+                )
+                SELECT tenant_id, id, dataset_id, case_ids_json::text,
+                       configuration_json::text, principal_json::text,
+                       lease_owner, lease_token, lease_until
+                  FROM claimed
+                 ORDER BY started_at, tenant_id, id
+                """, (result, row) -> lease(result), databaseTime(now), limit,
+                owner, databaseTime(leaseUntil));
+    }
+
+    @Override
+    public boolean heartbeat(WorkLease lease, Instant leaseUntil, Instant now) {
+        Objects.requireNonNull(lease, "lease must not be null");
+        requireLeaseWindow(leaseUntil, now);
+        return jdbc.update("""
+                UPDATE evaluation_run
+                   SET lease_until = ?
+                 WHERE tenant_id = ? AND id = ? AND status = 'RUNNING'
+                   AND lease_owner = ? AND lease_token = ? AND lease_until >= ?
+                """, databaseTime(leaseUntil), lease.tenantId().value(), lease.runId(),
+                lease.leaseOwner(), lease.leaseToken(), databaseTime(now)) == 1;
     }
 
     @Override
@@ -228,17 +346,25 @@ public final class PostgresEvaluationStore implements EvaluationStore {
     }
 
     @Override
-    public void completeRun(
-            TenantId tenantId,
-            UUID runId,
+    public boolean completeRun(
+            WorkLease lease,
             RetrievalEvaluationReport report,
             Instant completedAt
     ) {
-        requireTenant(tenantId);
-        Objects.requireNonNull(runId, "runId must not be null");
+        Objects.requireNonNull(lease, "lease must not be null");
         Objects.requireNonNull(report, "report must not be null");
         Objects.requireNonNull(completedAt, "completedAt must not be null");
-        transaction.executeWithoutResult(status -> {
+        Boolean accepted = transaction.execute(status -> {
+            int owned = jdbc.update("""
+                    UPDATE evaluation_run
+                       SET lease_until = lease_until
+                     WHERE tenant_id = ? AND id = ? AND status = 'RUNNING'
+                       AND lease_owner = ? AND lease_token = ? AND lease_until >= ?
+                    """, lease.tenantId().value(), lease.runId(), lease.leaseOwner(),
+                    lease.leaseToken(), databaseTime(completedAt));
+            if (owned != 1) {
+                return false;
+            }
             for (var result : report.cases()) {
                 jdbc.update("""
                         INSERT INTO evaluation_case_result
@@ -257,8 +383,8 @@ public final class PostgresEvaluationStore implements EvaluationStore {
                             duration_ms = EXCLUDED.duration_ms,
                             error_code = EXCLUDED.error_code
                         """,
-                        tenantId.value(),
-                        runId,
+                        lease.tenantId().value(),
+                        lease.runId(),
                         result.caseId(),
                         result.traceId(),
                         result.succeeded() ? "SUCCEEDED" : "FAILED",
@@ -285,37 +411,63 @@ public final class PostgresEvaluationStore implements EvaluationStore {
                            metrics_json = ?::jsonb,
                            case_count = ?,
                            failed_case_count = ?,
-                           completed_at = ?
+                           completed_at = ?,
+                           lease_owner = NULL,
+                           lease_until = NULL
                      WHERE tenant_id = ? AND id = ? AND status = 'RUNNING'
+                       AND lease_owner = ? AND lease_token = ?
                     """,
                     json(metrics),
                     report.caseCount(),
                     report.failedCaseCount(),
                     databaseTime(completedAt),
-                    tenantId.value(),
-                    runId
+                    lease.tenantId().value(),
+                    lease.runId(),
+                    lease.leaseOwner(),
+                    lease.leaseToken()
             );
             if (updated != 1) {
                 throw new IllegalStateException(
                         "evaluation run is no longer in RUNNING state"
                 );
             }
+            return true;
         });
+        return Boolean.TRUE.equals(accepted);
     }
 
     @Override
-    public void failRun(
-            TenantId tenantId,
-            UUID runId,
+    public boolean failRun(
+            WorkLease lease,
             String errorCode,
             Instant completedAt
     ) {
-        requireTenant(tenantId);
-        jdbc.update("""
+        Objects.requireNonNull(lease, "lease must not be null");
+        Objects.requireNonNull(completedAt, "completedAt must not be null");
+        return jdbc.update("""
                 UPDATE evaluation_run
-                   SET status = 'FAILED', error_code = ?, completed_at = ?
+                   SET status = 'FAILED', error_code = ?, completed_at = ?,
+                       lease_owner = NULL, lease_until = NULL
                  WHERE tenant_id = ? AND id = ? AND status = 'RUNNING'
-                """, errorCode, databaseTime(completedAt), tenantId.value(), runId);
+                   AND lease_owner = ? AND lease_token = ? AND lease_until >= ?
+                """, requireText(errorCode, "errorCode"), databaseTime(completedAt),
+                lease.tenantId().value(), lease.runId(), lease.leaseOwner(),
+                lease.leaseToken(), databaseTime(completedAt)) == 1;
+    }
+
+    private WorkLease lease(ResultSet row) throws SQLException {
+        TenantId tenantId = new TenantId(row.getString("tenant_id"));
+        return new WorkLease(
+                tenantId,
+                row.getObject("id", UUID.class),
+                row.getObject("dataset_id", UUID.class),
+                uuidList(row.getString("case_ids_json")),
+                objectMap(row.getString("configuration_json")),
+                principal(tenantId, row.getString("principal_json")),
+                row.getString("lease_owner"),
+                row.getLong("lease_token"),
+                instant(row, "lease_until")
+        );
     }
 
     private Dataset dataset(ResultSet row) throws SQLException {
@@ -385,6 +537,40 @@ public final class PostgresEvaluationStore implements EvaluationStore {
         return Set.copyOf(values);
     }
 
+    private List<UUID> uuidList(String json) {
+        return read(json, new TypeReference<List<String>>() { }).stream()
+                .map(UUID::fromString)
+                .toList();
+    }
+
+    private PrincipalContext principal(TenantId tenantId, String json) {
+        Map<String, Object> values = objectMap(json);
+        return new PrincipalContext(
+                tenantId,
+                new PrincipalId(String.valueOf(values.get("principalId"))),
+                stringValues(values.get("roleIds")),
+                stringValues(values.get("departmentIds")),
+                Boolean.parseBoolean(String.valueOf(values.get("systemPrincipal")))
+        );
+    }
+
+    private static Map<String, Object> principal(PrincipalContext principal) {
+        return Map.of(
+                "principalId", principal.principalId().value(),
+                "roleIds", principal.roleIds(),
+                "departmentIds", principal.departmentIds(),
+                "systemPrincipal", principal.systemPrincipal()
+        );
+    }
+
+    private static Set<String> stringValues(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return Set.of();
+        }
+        return list.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
     private Map<String, String> stringMap(String json) {
         if (json == null) {
             return Map.of();
@@ -414,6 +600,23 @@ public final class PostgresEvaluationStore implements EvaluationStore {
 
     private static OffsetDateTime databaseTime(Instant value) {
         return OffsetDateTime.ofInstant(value, ZoneOffset.UTC);
+    }
+
+    private static String requireText(String value, String field) {
+        Objects.requireNonNull(value, field + " must not be null");
+        String normalized = value.strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException(field + " must not be blank");
+        }
+        return normalized;
+    }
+
+    private static void requireLeaseWindow(Instant leaseUntil, Instant now) {
+        Objects.requireNonNull(leaseUntil, "leaseUntil must not be null");
+        Objects.requireNonNull(now, "now must not be null");
+        if (!leaseUntil.isAfter(now)) {
+            throw new IllegalArgumentException("leaseUntil must be after now");
+        }
     }
 
     private static void requireTenant(TenantId tenantId) {

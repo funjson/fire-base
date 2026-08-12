@@ -18,7 +18,8 @@ public interface ActiveRevisionGuard {
     boolean isActive(TenantId tenantId, DocumentId documentId, UUID revisionId);
 
     /**
-     * Retains only candidates whose revision is currently active.
+     * Retains only candidates whose tenant, space, document and revision match the
+     * current active document head.
      * Implementations must resolve the batch without issuing one query per candidate.
      */
     List<RetrievalCandidate> retainActive(

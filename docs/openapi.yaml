@@ -1,0 +1,2373 @@
+openapi: 3.0.3
+info:
+  title: Infinity Knowledge Control Plane API
+  version: 1.0.0
+  description: |
+    Machine-readable contract for the implemented `/api/v1` HTTP surface.
+    Every operation requires an OIDC bearer token. Operations described as
+    administrator-only additionally require the `knowledge-admin` realm role.
+    Tenant and principal identity are derived exclusively from the validated token.
+servers:
+  - url: http://localhost:8080
+    description: Local control plane
+security:
+  - bearerAuth: []
+tags:
+  - name: Spaces
+  - name: Documents
+  - name: Projections
+  - name: Query
+  - name: Connectors
+  - name: Management
+  - name: Evaluations
+  - name: Traces
+  - name: Audit
+  - name: Graph
+  - name: Wiki
+paths:
+  /api/v1/spaces:
+    post:
+      tags: [Spaces]
+      operationId: createSpace
+      summary: Idempotently create a tenant knowledge space
+      description: Requires `knowledge-admin`; the creator receives an administrator ACL grant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSpaceRequest'
+      responses:
+        '204':
+          description: Space exists and has been provisioned
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/accessible:
+    get:
+      tags: [Spaces]
+      operationId: listAccessibleSpaces
+      summary: List active spaces readable by the current principal
+      responses:
+        '200':
+          description: Accessible spaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccessibleSpace'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/spaces/{spaceId}/acl:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    get:
+      tags: [Spaces]
+      operationId: listSpaceAcl
+      summary: List exact ACL grants for a space
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: ACL grants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpaceGrant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Spaces]
+      operationId: grantSpaceAcl
+      summary: Idempotently add an exact ACL grant
+      description: Requires `knowledge-admin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpaceAclRequest'
+      responses:
+        '204':
+          description: Grant exists
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    delete:
+      tags: [Spaces]
+      operationId: revokeSpaceAcl
+      summary: Revoke an exact ACL grant
+      description: Requires `knowledge-admin`; revoking a missing grant is still successful.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpaceAclRequest'
+      responses:
+        '204':
+          description: Exact grant is absent
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/{spaceId}/projections/rebuild:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    post:
+      tags: [Projections]
+      operationId: rebuildSpaceProjections
+      summary: Requeue configured projections for active revisions in a space
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Rebuild enqueue result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectionRebuildResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/documents/markdown:
+    post:
+      tags: [Documents]
+      operationId: ingestMarkdown
+      summary: Ingest or idempotently update a Markdown document
+      description: Requires `knowledge-admin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkdownDocumentRequest'
+      responses:
+        '200':
+          description: Active revision and projection admission status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarkdownDocumentResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/documents/files:
+    post:
+      tags: [Documents]
+      operationId: ingestFile
+      summary: Retain, parse and ingest a supported source file
+      description: Requires `knowledge-admin`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FileDocumentRequest'
+      responses:
+        '200':
+          description: Active revision and retained source metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileDocumentResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/SourceTooLarge'
+  /api/v1/documents/{documentId}/source:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      operationId: getDocumentSourceMetadata
+      summary: Get authorized original-source metadata
+      description: Tenant administrators may inspect retained inactive sources; other callers must have access to an active document.
+      responses:
+        '200':
+          description: Source metadata without object-store coordinates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceObjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
+  /api/v1/documents/{documentId}/source/content:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      operationId: downloadDocumentSource
+      summary: Stream an authorized original source
+      description: Tenant administrators may inspect retained inactive sources; other callers must have access to an active document.
+      parameters:
+        - name: inline
+          in: query
+          required: false
+          description: Request a sandboxed inline response when the media type is previewable.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Source bytes; unsafe types remain attachments even when inline is requested
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            text/plain:
+              schema:
+                type: string
+                format: binary
+            text/markdown:
+              schema:
+                type: string
+                format: binary
+            text/html:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
+  /api/v1/documents/{documentId}/status:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    patch:
+      tags: [Documents]
+      operationId: transitionDocumentStatus
+      summary: Apply a reversible document lifecycle transition
+      description: Requires `knowledge-admin` and optimistic version matching.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentLifecycleRequest'
+      responses:
+        '200':
+          description: Current lifecycle state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentLifecycleResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/DocumentLifecycleConflict'
+  /api/v1/documents/{documentId}/projections:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Projections]
+      operationId: listDocumentProjections
+      summary: List current-revision asynchronous projection jobs
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Projection jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectionJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/documents/{documentId}/projections/{projectionType}/retry:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+      - $ref: '#/components/parameters/ProjectionType'
+    post:
+      tags: [Projections]
+      operationId: retryDocumentProjection
+      summary: Requeue a dead-lettered current-revision projection
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Whether a job was requeued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectionRetryResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/knowledge/query:
+    post:
+      tags: [Query]
+      operationId: queryKnowledge
+      summary: Retrieve an ACL-filtered evidence bundle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KnowledgeQueryRequest'
+      responses:
+        '200':
+          description: Evidence bundle and trace identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeQueryResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/connectors/obsidian:
+    post:
+      tags: [Connectors]
+      operationId: configureObsidianConnector
+      summary: Create or update an allowlisted local Obsidian connector
+      description: Requires `knowledge-admin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObsidianConnectorRequest'
+      responses:
+        '204':
+          description: Connector configuration stored
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/connectors/{connectorId}/sync:
+    parameters:
+      - $ref: '#/components/parameters/ConnectorId'
+    post:
+      tags: [Connectors]
+      operationId: synchronizeConnector
+      summary: Start an asynchronous connector synchronization
+      description: Requires `knowledge-admin`.
+      responses:
+        '202':
+          description: Synchronization accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorSyncResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/OperationInProgress'
+        '503':
+          $ref: '#/components/responses/WorkQueueSaturated'
+  /api/v1/connectors/runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Connectors]
+      operationId: getConnectorRun
+      summary: Get a tenant-bound connector synchronization run
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Synchronization run state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorRunResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/overview:
+    get:
+      tags: [Management]
+      operationId: getAdminOverview
+      summary: Get tenant management counters
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Overview counters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/spaces:
+    get:
+      tags: [Management]
+      operationId: listAdminSpaces
+      summary: List tenant spaces for administration
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Tenant spaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagementSpace'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/documents:
+    get:
+      tags: [Management]
+      operationId: listAdminDocuments
+      summary: Page tenant documents for administration
+      description: Requires `knowledge-admin`; deleted documents are omitted.
+      parameters:
+        - name: spaceId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Document page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/documents/{documentId}/chunks:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Management]
+      operationId: listAdminDocumentChunks
+      summary: List active-revision chunks for one document
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Chunks ordered by ordinal
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagementChunk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/documents/{documentId}/revisions:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Management]
+      operationId: listAdminDocumentRevisions
+      summary: List immutable revisions for one document
+      description: Requires `knowledge-admin`; the active revision is identified by the `active` field.
+      responses:
+        '200':
+          description: Revisions ordered by revision history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagementRevision'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/documents/{documentId}/revisions/{revisionId}/chunks:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+      - $ref: '#/components/parameters/RevisionId'
+    get:
+      tags: [Management]
+      operationId: listAdminDocumentRevisionChunks
+      summary: List chunks for one immutable document revision
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Revision chunks ordered by ordinal
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagementChunk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/connectors:
+    get:
+      tags: [Connectors, Management]
+      operationId: listAdminConnectors
+      summary: List tenant connector configurations and last-run summaries
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Connectors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagementConnector'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/traces:
+    get:
+      tags: [Traces]
+      operationId: listTraces
+      summary: List recent tenant retrieval traces
+      description: Requires `knowledge-admin`.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Retrieval traces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trace'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/traces/{traceId}:
+    parameters:
+      - $ref: '#/components/parameters/TraceId'
+    get:
+      tags: [Traces]
+      operationId: getTrace
+      summary: Get one tenant retrieval trace
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Retrieval trace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trace'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/audit-events:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: Page security-safe tenant mutation audit events
+      description: Requires `knowledge-admin`.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 1000000
+            default: 0
+      responses:
+        '200':
+          description: Audit event page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/evaluations/datasets:
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationDatasets
+      summary: List tenant evaluation datasets
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Evaluation datasets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvaluationDataset'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationDataset
+      summary: Create an evaluation dataset
+      description: Requires `knowledge-admin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEvaluationDatasetRequest'
+      responses:
+        '201':
+          description: Created dataset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationDataset'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/evaluations/datasets/{datasetId}/cases:
+    parameters:
+      - $ref: '#/components/parameters/DatasetId'
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationCases
+      summary: List cases in an evaluation dataset
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Evaluation cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvaluationCase'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Evaluations]
+      operationId: createEvaluationCase
+      summary: Add a labeled case to an evaluation dataset
+      description: Requires `knowledge-admin`; at least one expected document or chunk is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEvaluationCaseRequest'
+      responses:
+        '201':
+          description: Created case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationCase'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/evaluations/datasets/{datasetId}/runs:
+    parameters:
+      - $ref: '#/components/parameters/DatasetId'
+    get:
+      tags: [Evaluations]
+      operationId: listEvaluationRuns
+      summary: List runs in an evaluation dataset
+      description: Requires `knowledge-admin`; list entries omit case results.
+      responses:
+        '200':
+          description: Evaluation runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvaluationRun'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Evaluations]
+      operationId: startEvaluationRun
+      summary: Start an asynchronous evaluation run
+      description: Requires `knowledge-admin`; the dataset must contain at least one case.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartEvaluationRunRequest'
+      responses:
+        '202':
+          description: Accepted evaluation run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationRun'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/OperationInProgress'
+        '503':
+          $ref: '#/components/responses/WorkQueueSaturated'
+  /api/v1/evaluations/datasets/{datasetId}/compare:
+    parameters:
+      - $ref: '#/components/parameters/DatasetId'
+    post:
+      tags: [Evaluations]
+      operationId: compareEvaluationRuns
+      summary: Compare completed candidate and baseline runs
+      description: Requires `knowledge-admin`; both distinct runs must belong to this dataset and be `SUCCEEDED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompareEvaluationRunsRequest'
+      responses:
+        '200':
+          description: Quality-gate comparison
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationRunComparison'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/evaluations/runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/RunId'
+    get:
+      tags: [Evaluations]
+      operationId: getEvaluationRun
+      summary: Get one evaluation run with case results
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Evaluation run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationRun'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/graph/search:
+    post:
+      tags: [Graph]
+      operationId: searchKnowledgeGraph
+      summary: Explore ACL-filtered, source-backed graph relations
+      description: Requires `knowledge-admin`. The stable route returns 503 when the Graph capability is disabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GraphSearchRequest'
+      responses:
+        '200':
+          description: Bounded graph edges with source provenance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphSearchResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/GraphCapabilityUnavailable'
+  /api/v1/admin/wiki/pages:
+    get:
+      tags: [Wiki]
+      operationId: listWikiPages
+      summary: List governed Wiki pages
+      description: Requires `knowledge-admin`.
+      parameters:
+        - name: spaceId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/WikiPageStatus'
+      responses:
+        '200':
+          description: Wiki page summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WikiPageSummary'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Wiki]
+      operationId: compileWikiPage
+      summary: Compile selected active chunks into a Wiki draft
+      description: Requires `knowledge-admin`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompileWikiPageRequest'
+      responses:
+        '201':
+          description: Compiled Wiki page detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WikiPageDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/WikiConflict'
+  /api/v1/admin/wiki/pages/{pageId}:
+    parameters:
+      - $ref: '#/components/parameters/PageId'
+    get:
+      tags: [Wiki]
+      operationId: getWikiPage
+      summary: Get Wiki page, latest revision and active revision
+      description: Requires `knowledge-admin`.
+      responses:
+        '200':
+          description: Wiki page detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WikiPageDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/wiki/pages/{pageId}/submit-review:
+    parameters:
+      - $ref: '#/components/parameters/PageId'
+    post:
+      tags: [Wiki]
+      operationId: submitWikiPageForReview
+      summary: Transition a Wiki page to IN_REVIEW
+      description: Requires `knowledge-admin` and optimistic version matching.
+      requestBody:
+        $ref: '#/components/requestBodies/WikiTransition'
+      responses:
+        '200':
+          $ref: '#/components/responses/WikiPageDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/WikiConflict'
+  /api/v1/admin/wiki/pages/{pageId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/PageId'
+    post:
+      tags: [Wiki]
+      operationId: rejectWikiPage
+      summary: Transition a Wiki page back to DRAFT
+      description: Requires `knowledge-admin` and optimistic version matching.
+      requestBody:
+        $ref: '#/components/requestBodies/WikiTransition'
+      responses:
+        '200':
+          $ref: '#/components/responses/WikiPageDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/WikiConflict'
+  /api/v1/admin/wiki/pages/{pageId}/publish:
+    parameters:
+      - $ref: '#/components/parameters/PageId'
+    post:
+      tags: [Wiki]
+      operationId: publishWikiPage
+      summary: Transition a Wiki page to PUBLISHED
+      description: Requires `knowledge-admin` and optimistic version matching.
+      requestBody:
+        $ref: '#/components/requestBodies/WikiTransition'
+      responses:
+        '200':
+          $ref: '#/components/responses/WikiPageDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/WikiConflict'
+  /api/v1/admin/wiki/pages/{pageId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/PageId'
+    post:
+      tags: [Wiki]
+      operationId: archiveWikiPage
+      summary: Transition a Wiki page to ARCHIVED
+      description: Requires `knowledge-admin` and optimistic version matching.
+      requestBody:
+        $ref: '#/components/requestBodies/WikiTransition'
+      responses:
+        '200':
+          $ref: '#/components/responses/WikiPageDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/WikiConflict'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    SpaceId:
+      name: spaceId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 64
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RevisionId:
+      name: revisionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ConnectorId:
+      name: connectorId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 128
+    ProjectionType:
+      name: projectionType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ProjectionType'
+    DatasetId:
+      name: datasetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TraceId:
+      name: traceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PageId:
+      name: pageId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  requestBodies:
+    WikiTransition:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/WikiTransitionRequest'
+  responses:
+    Unauthorized:
+      description: Bearer token is absent or invalid
+    Forbidden:
+      description: The authenticated principal is not allowed to perform the operation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    InvalidRequest:
+      description: Request validation, parsing or domain argument failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DocumentNotFound:
+      description: The requested authorized document source does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    DocumentLifecycleConflict:
+      description: Optimistic version or lifecycle transition conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    OperationInProgress:
+      description: The same resource already has an operation in progress
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    WorkQueueSaturated:
+      description: The bounded asynchronous work queue cannot accept more work
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    GraphCapabilityUnavailable:
+      description: The Graph adapter is not enabled for this deployment
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    SourceTooLarge:
+      description: Uploaded source exceeds the configured limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    WikiConflict:
+      description: Optimistic version or Wiki lifecycle transition conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    WikiPageDetail:
+      description: Current Wiki page detail
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/WikiPageDetail'
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message, requestId, timestamp]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    CreateSpaceRequest:
+      type: object
+      required: [spaceId, name]
+      properties:
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+    AccessibleSpace:
+      type: object
+      required: [id, name, description, status, version, documentCount, updatedAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        version:
+          type: integer
+          format: int64
+        documentCount:
+          type: integer
+          format: int64
+        updatedAt:
+          type: string
+          format: date-time
+    SpaceAclRequest:
+      type: object
+      required: [subjectType, subjectId, permission]
+      properties:
+        subjectType:
+          type: string
+          enum: [USER, ROLE, DEPARTMENT, TENANT]
+          maxLength: 32
+        subjectId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        permission:
+          type: string
+          enum: [READ, WRITE, ADMIN]
+          maxLength: 32
+    SpaceGrant:
+      allOf:
+        - $ref: '#/components/schemas/SpaceAclRequest'
+    MarkdownDocumentRequest:
+      type: object
+      required: [spaceId, externalId, title, sourceUri, language, content]
+      properties:
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        externalId:
+          type: string
+          minLength: 1
+          maxLength: 512
+        title:
+          type: string
+          minLength: 1
+          maxLength: 512
+        sourceUri:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        language:
+          type: string
+          minLength: 1
+          maxLength: 32
+        authority:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 0
+        content:
+          type: string
+          minLength: 1
+          maxLength: 2000000
+        metadata:
+          type: object
+          maxProperties: 64
+          additionalProperties:
+            type: string
+            minLength: 1
+            maxLength: 2048
+    MarkdownDocumentResponse:
+      type: object
+      required: [documentId, revisionId, changed, elementCount, chunkCount, vectorStatus, warnings]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        revisionId:
+          type: string
+          format: uuid
+        changed:
+          type: boolean
+        elementCount:
+          type: integer
+        chunkCount:
+          type: integer
+        vectorStatus:
+          type: string
+        warnings:
+          type: array
+          items:
+            type: string
+    FileDocumentRequest:
+      type: object
+      required: [file, spaceId, externalId]
+      properties:
+        file:
+          type: string
+          format: binary
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        externalId:
+          type: string
+          minLength: 1
+          maxLength: 512
+        title:
+          type: string
+          maxLength: 512
+        language:
+          type: string
+          minLength: 1
+          maxLength: 32
+          default: zh-CN
+        authority:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 80
+    FileDocumentResponse:
+      type: object
+      required: [documentId, revisionId, changed, elementCount, chunkCount, originalFileName, mediaType, contentLength, vectorStatus, warnings]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        revisionId:
+          type: string
+          format: uuid
+        changed:
+          type: boolean
+        elementCount:
+          type: integer
+        chunkCount:
+          type: integer
+        originalFileName:
+          type: string
+        mediaType:
+          type: string
+        contentLength:
+          type: integer
+          format: int64
+        vectorStatus:
+          type: string
+        warnings:
+          type: array
+          items:
+            type: string
+    SourceObjectResponse:
+      type: object
+      required: [documentId, revisionId, documentStatus, originalFileName, mediaType, contentLength, checksumSha256, storedAt, previewable]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        revisionId:
+          type: string
+          format: uuid
+        documentStatus:
+          $ref: '#/components/schemas/DocumentStatus'
+        originalFileName:
+          type: string
+        mediaType:
+          type: string
+        contentLength:
+          type: integer
+          format: int64
+        checksumSha256:
+          type: string
+        storedAt:
+          type: string
+          format: date-time
+        previewable:
+          type: boolean
+    DocumentLifecycleRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ACTIVE, ARCHIVED, DELETED]
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+    DocumentLifecycleResponse:
+      type: object
+      required: [documentId, spaceId, status, version, updatedAt, changed]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, ARCHIVED, DELETED]
+        version:
+          type: integer
+          format: int64
+        updatedAt:
+          type: string
+          format: date-time
+        changed:
+          type: boolean
+    DocumentStatus:
+      type: string
+      enum: [DRAFT, ACTIVE, DEPRECATED, ARCHIVED, DELETED]
+    ProjectionType:
+      type: string
+      enum: [VECTOR, KEYWORD, GRAPH]
+    ProjectionJobResponse:
+      type: object
+      required: [id, projectionType, status, attemptCount, lastErrorCode, availableAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectionType:
+          $ref: '#/components/schemas/ProjectionType'
+        status:
+          type: string
+          description: Durable job state such as PENDING, RETRY, RUNNING, SUCCEEDED or DEAD.
+        attemptCount:
+          type: integer
+          minimum: 0
+        lastErrorCode:
+          type: string
+          nullable: true
+        availableAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ProjectionRetryResponse:
+      type: object
+      required: [requeued]
+      properties:
+        requeued:
+          type: boolean
+    ProjectionRebuildResponse:
+      type: object
+      required: [jobs, projectionTypes]
+      properties:
+        jobs:
+          type: integer
+        projectionTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectionType'
+    KnowledgeQueryRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 16000
+        spaceIds:
+          type: array
+          uniqueItems: true
+          default: []
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 100
+        filters:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Only `language` and `sourceType` keys are accepted.
+    KnowledgeQueryResponse:
+      type: object
+      required: [requestId, traceId, tenantId, evidences, sufficient, warnings, generatedAt]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        traceId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+        evidences:
+          type: array
+          items:
+            $ref: '#/components/schemas/KnowledgeEvidence'
+        sufficient:
+          type: boolean
+        warnings:
+          type: array
+          items:
+            type: string
+        generatedAt:
+          type: string
+          format: date-time
+    KnowledgeEvidence:
+      type: object
+      required: [id, content, relevance, authority, channels, citation]
+      properties:
+        id:
+          type: string
+          format: uuid
+        content:
+          type: string
+        relevance:
+          type: number
+          format: double
+        authority:
+          type: integer
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [KEYWORD, VECTOR, GRAPH, PAGE]
+        citation:
+          $ref: '#/components/schemas/KnowledgeCitation'
+    KnowledgeCitation:
+      type: object
+      required: [documentId, revisionId, chunkId, title, sectionPath, sourceUri]
+      properties:
+        documentId:
+          type: string
+        revisionId:
+          type: string
+          format: uuid
+        chunkId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        sectionPath:
+          type: array
+          items:
+            type: string
+        sourceUri:
+          type: string
+    ObsidianConnectorRequest:
+      type: object
+      required: [connectorId, spaceId, displayName, vaultName, vaultPath]
+      properties:
+        connectorId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 256
+        vaultName:
+          type: string
+          minLength: 1
+          maxLength: 256
+        vaultPath:
+          type: string
+          minLength: 1
+          maxLength: 2048
+        authority:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 0
+    ConnectorSyncResponse:
+      type: object
+      required: [runId, status]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        status:
+          type: string
+    ConnectorRunResponse:
+      type: object
+      required: [runId, connectorId, status, recordsSeen, recordsChanged, recordsDeleted, errorCode, startedAt, completedAt]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        connectorId:
+          type: string
+        status:
+          type: string
+        recordsSeen:
+          type: integer
+          format: int64
+        recordsChanged:
+          type: integer
+          format: int64
+        recordsDeleted:
+          type: integer
+          format: int64
+        errorCode:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    ManagementOverview:
+      type: object
+      required: [spaces, activeDocuments, chunks, connectors, pendingProjections, deadProjections, evaluationDatasets, evaluationRuns]
+      properties:
+        spaces: {type: integer, format: int64}
+        activeDocuments: {type: integer, format: int64}
+        chunks: {type: integer, format: int64}
+        connectors: {type: integer, format: int64}
+        pendingProjections: {type: integer, format: int64}
+        deadProjections: {type: integer, format: int64}
+        evaluationDatasets: {type: integer, format: int64}
+        evaluationRuns: {type: integer, format: int64}
+    ManagementSpace:
+      allOf:
+        - $ref: '#/components/schemas/AccessibleSpace'
+    ManagementDocument:
+      type: object
+      required: [id, spaceId, title, sourceType, sourceUri, status, authority, version, activeRevisionId, chunkCount, keywordStatus, vectorStatus, graphStatus, originalFileName, sourceMediaType, sourceContentLength, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+        title:
+          type: string
+        sourceType:
+          type: string
+        sourceUri:
+          type: string
+        status:
+          $ref: '#/components/schemas/DocumentStatus'
+        authority:
+          type: integer
+        version:
+          type: integer
+          format: int64
+        activeRevisionId:
+          type: string
+          format: uuid
+          nullable: true
+        chunkCount:
+          type: integer
+          format: int64
+        keywordStatus:
+          type: string
+        vectorStatus:
+          type: string
+        graphStatus:
+          type: string
+        originalFileName:
+          type: string
+          nullable: true
+        sourceMediaType:
+          type: string
+          nullable: true
+        sourceContentLength:
+          type: integer
+          format: int64
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+    DocumentPage:
+      type: object
+      required: [items, limit, offset, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementDocument'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+          format: int64
+    ManagementChunk:
+      type: object
+      required: [id, ordinal, sectionPath, content, contentHash]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+        sectionPath:
+          type: array
+          items:
+            type: string
+        content:
+          type: string
+        contentHash:
+          type: string
+    ManagementRevision:
+      type: object
+      required: [revisionId, revisionNumber, contentHash, mediaType, language, parserVersion, createdAt, active, chunkCount]
+      properties:
+        revisionId:
+          type: string
+          format: uuid
+        revisionNumber:
+          type: integer
+          format: int64
+        contentHash:
+          type: string
+        mediaType:
+          type: string
+        language:
+          type: string
+        parserVersion:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+        chunkCount:
+          type: integer
+          format: int64
+    ManagementConnector:
+      type: object
+      required: [id, spaceId, type, displayName, status, version, lastRunId, lastRunStatus, lastRunAt, updatedAt]
+      properties:
+        id:
+          type: string
+        spaceId:
+          type: string
+        type:
+          type: string
+        displayName:
+          type: string
+        status:
+          type: string
+        version:
+          type: integer
+          format: int64
+        lastRunId:
+          type: string
+          format: uuid
+          nullable: true
+        lastRunStatus:
+          type: string
+          nullable: true
+        lastRunAt:
+          type: string
+          format: date-time
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+    Trace:
+      type: object
+      required: [id, requestId, principalId, totalDurationMs, resultCount, createdAt, steps]
+      properties:
+        id:
+          type: string
+          format: uuid
+        requestId:
+          type: string
+          format: uuid
+        principalId:
+          type: string
+        totalDurationMs:
+          type: integer
+          format: int64
+        resultCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraceStep'
+    TraceStep:
+      type: object
+      required: [ordinal, name, durationMs, inputCount, outputCount, status]
+      properties:
+        ordinal:
+          type: integer
+        name:
+          type: string
+        durationMs:
+          type: integer
+          format: int64
+        inputCount:
+          type: integer
+        outputCount:
+          type: integer
+        status:
+          type: string
+    AuditPage:
+      type: object
+      required: [items, limit, offset, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+          format: int64
+    AuditEvent:
+      type: object
+      required: [id, tenantId, principalId, requestId, httpMethod, routePattern, action, responseStatus, outcome, durationMs, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+        principalId:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+        httpMethod:
+          type: string
+        routePattern:
+          type: string
+        action:
+          type: string
+        responseStatus:
+          type: integer
+        outcome:
+          type: string
+          enum: [SUCCEEDED, FAILED]
+        durationMs:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    CreateEvaluationDatasetRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 256
+        description:
+          type: string
+          maxLength: 4000
+    CreateEvaluationCaseRequest:
+      type: object
+      required: [query, spaceIds]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 16000
+        spaceIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        expectedDocuments:
+          type: array
+          uniqueItems: true
+          default: []
+          items:
+            type: string
+            format: uuid
+        expectedChunks:
+          type: array
+          uniqueItems: true
+          default: []
+          items:
+            type: string
+            format: uuid
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 100
+        labels:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+    StartEvaluationRunRequest:
+      type: object
+      properties:
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 100
+        configuration:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+    CompareEvaluationRunsRequest:
+      type: object
+      required: [baselineRunId, candidateRunId]
+      properties:
+        baselineRunId:
+          type: string
+          format: uuid
+        candidateRunId:
+          type: string
+          format: uuid
+        minimumHitRate:
+          $ref: '#/components/schemas/UnitInterval'
+        minimumRecallAtK:
+          $ref: '#/components/schemas/UnitInterval'
+        minimumMrr:
+          $ref: '#/components/schemas/UnitInterval'
+        minimumNdcgAtK:
+          $ref: '#/components/schemas/UnitInterval'
+        maximumRegression:
+          allOf:
+            - $ref: '#/components/schemas/UnitInterval'
+          default: 0
+    UnitInterval:
+      type: number
+      format: double
+      minimum: 0
+      maximum: 1
+      nullable: true
+    EvaluationDataset:
+      type: object
+      required: [id, name, description, version, status, caseCount, runCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: integer
+          format: int64
+        status:
+          type: string
+        caseCount:
+          type: integer
+          format: int64
+        runCount:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    EvaluationCase:
+      type: object
+      required: [id, datasetId, query, spaceIds, expectedDocuments, expectedChunks, topK, labels, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        datasetId:
+          type: string
+          format: uuid
+        query:
+          type: string
+        spaceIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        expectedDocuments:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        expectedChunks:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        topK:
+          type: integer
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+    EvaluationRun:
+      type: object
+      required: [id, datasetId, status, caseCount, failedCaseCount, configuration, metrics, requestedBy, errorCode, startedAt, completedAt, results]
+      properties:
+        id:
+          type: string
+          format: uuid
+        datasetId:
+          type: string
+          format: uuid
+        status:
+          type: string
+        caseCount:
+          type: integer
+        failedCaseCount:
+          type: integer
+        configuration:
+          type: object
+          additionalProperties: true
+        metrics:
+          type: object
+          additionalProperties: true
+        requestedBy:
+          type: string
+        errorCode:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationCaseResult'
+    EvaluationCaseResult:
+      type: object
+      required: [caseId, traceId, status, hit, recallAtK, reciprocalRank, ndcgAtK, resultCount, durationMs, errorCode]
+      properties:
+        caseId:
+          type: string
+          format: uuid
+        traceId:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+        hit:
+          type: boolean
+        recallAtK:
+          type: number
+          format: double
+        reciprocalRank:
+          type: number
+          format: double
+        ndcgAtK:
+          type: number
+          format: double
+        resultCount:
+          type: integer
+        durationMs:
+          type: integer
+          format: int64
+        errorCode:
+          type: string
+          nullable: true
+    EvaluationRunComparison:
+      type: object
+      required: [datasetId, baselineRunId, candidateRunId, baseline, candidate, deltas, maximumRegression, passed, violations]
+      properties:
+        datasetId:
+          type: string
+          format: uuid
+        baselineRunId:
+          type: string
+          format: uuid
+        candidateRunId:
+          type: string
+          format: uuid
+        baseline:
+          $ref: '#/components/schemas/MetricMap'
+        candidate:
+          $ref: '#/components/schemas/MetricMap'
+        deltas:
+          $ref: '#/components/schemas/MetricMap'
+        maximumRegression:
+          type: number
+          format: double
+        passed:
+          type: boolean
+        violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvaluationGateViolation'
+    MetricMap:
+      type: object
+      additionalProperties:
+        type: number
+        format: double
+    EvaluationGateViolation:
+      type: object
+      required: [metric, rule, expected, actual]
+      properties:
+        metric:
+          type: string
+        rule:
+          type: string
+          enum: [MINIMUM, MAXIMUM_REGRESSION]
+        expected:
+          type: number
+          format: double
+        actual:
+          type: number
+          format: double
+    GraphSearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 16000
+        spaceIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          default: []
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        maxHops:
+          type: integer
+          minimum: 1
+          maximum: 3
+          default: 2
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+    GraphSearchResponse:
+      type: object
+      required: [tenantId, edges]
+      properties:
+        tenantId:
+          type: string
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+    GraphEdge:
+      type: object
+      required: [relationId, source, target, type, depth, score, provenance]
+      properties:
+        relationId:
+          type: string
+          format: uuid
+        source:
+          $ref: '#/components/schemas/GraphNode'
+        target:
+          $ref: '#/components/schemas/GraphNode'
+        type:
+          type: string
+        depth:
+          type: integer
+        score:
+          type: number
+          format: double
+        provenance:
+          $ref: '#/components/schemas/GraphProvenance'
+    GraphNode:
+      type: object
+      required: [id, type, name]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        name:
+          type: string
+    GraphProvenance:
+      type: object
+      required: [documentId, revisionId, chunkId, documentTitle, sourceUri, excerpt, confidence]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        revisionId:
+          type: string
+          format: uuid
+        chunkId:
+          type: string
+          format: uuid
+        documentTitle:
+          type: string
+        sourceUri:
+          type: string
+        excerpt:
+          type: string
+        confidence:
+          type: number
+          format: double
+    WikiPageStatus:
+      type: string
+      enum: [DRAFT, IN_REVIEW, PUBLISHED, ARCHIVED]
+    CompileWikiPageRequest:
+      type: object
+      required: [spaceId, slug, title, sources]
+      properties:
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 256
+        title:
+          type: string
+          minLength: 1
+          maxLength: 512
+        sources:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/WikiSourceSelection'
+    WikiSourceSelection:
+      type: object
+      required: [documentId, revisionId, chunkId]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        revisionId:
+          type: string
+          format: uuid
+        chunkId:
+          type: string
+          format: uuid
+    WikiTransitionRequest:
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+    WikiPageSummary:
+      type: object
+      required: [id, spaceId, slug, title, status, latestRevisionId, activeRevisionId, version, sourceCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+        slug:
+          type: string
+        title:
+          type: string
+        status:
+          $ref: '#/components/schemas/WikiPageStatus'
+        latestRevisionId:
+          type: string
+          format: uuid
+        activeRevisionId:
+          type: string
+          format: uuid
+          nullable: true
+        version:
+          type: integer
+          format: int64
+        sourceCount:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    WikiPageDetail:
+      type: object
+      required: [page, latestRevision, activeRevision, unpublishedChanges]
+      properties:
+        page:
+          $ref: '#/components/schemas/WikiPageSummary'
+        latestRevision:
+          $ref: '#/components/schemas/WikiRevision'
+        activeRevision:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/WikiRevision'
+        unpublishedChanges:
+          type: boolean
+    WikiRevision:
+      type: object
+      required: [id, revisionNumber, summary, markdown, sources, contentHash, compilerVersion, generatedBy, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        revisionNumber:
+          type: integer
+          format: int64
+        summary:
+          type: string
+        markdown:
+          type: string
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/WikiSourceReference'
+        contentHash:
+          type: string
+        compilerVersion:
+          type: string
+        generatedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    WikiSourceReference:
+      type: object
+      required: [documentId, revisionId, chunkId, sectionPath, contentHash, authority]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        revisionId:
+          type: string
+          format: uuid
+        chunkId:
+          type: string
+          format: uuid
+        sectionPath:
+          type: array
+          items:
+            type: string
+        contentHash:
+          type: string
+        authority:
+          type: integer

@@ -1,12 +1,15 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.document.DocumentRevision;
+import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.document.KnowledgeElement;
+import dev.infinityknowledge.domain.document.SourceObjectReference;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteBatch;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteResult;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriter;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
+import dev.infinityknowledge.spi.management.DocumentLifecycleConflictException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -108,8 +111,16 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
         var document = batch.document();
         var revision = batch.revision();
         String tenantId = document.tenantId().value();
+        lockAndValidateConnectorFence(batch);
         lockDocumentIdentity(tenantId, document.id().value());
         Optional<StoredDocumentState> storedDocument = lockAndInspectDocument(batch);
+        storedDocument.ifPresent(stored -> {
+            if (stored.status() == DocumentStatus.DELETED) {
+                throw new DocumentLifecycleConflictException(
+                        "a deleted document must be restored explicitly before ingestion"
+                );
+            }
+        });
         upsertDocument(batch);
         Optional<StoredRevision> storedRevision = findRevision(
                 tenantId,
@@ -118,6 +129,11 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
         );
         if (storedRevision.isPresent()) {
             StoredRevision stored = storedRevision.orElseThrow();
+            boolean sourceObjectAccepted = persistSourceObject(
+                    tenantId,
+                    stored.id(),
+                    batch.sourceObject()
+            );
             boolean documentChanged = storedDocument
                     .map(StoredDocumentState::projectionChanged)
                     .orElse(false);
@@ -134,7 +150,8 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                     document.id(),
                     stored.id(),
                     changed,
-                    stored.chunkCount()
+                    stored.chunkCount(),
+                    sourceObjectAccepted
             );
         }
         long revisionNumber = nextRevisionNumber(tenantId, document.id().value());
@@ -154,6 +171,11 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                 revision.parserVersion(),
                 revision.createdAt().atOffset(ZoneOffset.UTC)
         );
+        boolean sourceObjectAccepted = persistSourceObject(
+                tenantId,
+                revision.id(),
+                batch.sourceObject()
+        );
         for (KnowledgeElement element : batch.elements()) {
             insertElement(tenantId, element);
         }
@@ -166,8 +188,82 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                 document.id(),
                 revision.id(),
                 true,
-                batch.chunks().size()
+                batch.chunks().size(),
+                sourceObjectAccepted
         );
+    }
+
+    /**
+     * Locks and validates an optional connector lease in this knowledge-write transaction.
+     * A takeover cannot pass the connector row lock until the revision commit finishes.
+     */
+    private void lockAndValidateConnectorFence(KnowledgeWriteBatch batch) {
+        var fence = batch.connectorWriteFence();
+        if (fence == null) {
+            return;
+        }
+        boolean owned = jdbc.query("""
+                SELECT 1
+                  FROM connector_sync_run
+                 WHERE tenant_id = ? AND id = ? AND status = 'RUNNING'
+                   AND lease_owner = ? AND lease_token = ?
+                   AND lease_until >= clock_timestamp()
+                 FOR UPDATE
+                """, (org.springframework.jdbc.core.ResultSetExtractor<Boolean>)
+                        result -> result.next(),
+                fence.tenantId().value(),
+                fence.runId(),
+                fence.leaseOwner(),
+                fence.leaseToken()
+        );
+        if (!owned) {
+            throw new IllegalStateException("connector write lease is no longer owned");
+        }
+    }
+
+    /**
+     * Persists at most one authoritative original object for a revision.
+     *
+     * <p>Concurrent duplicate uploads use distinct object IDs. The document advisory lock
+     * serializes this decision; callers delete an object when this method reports it was
+     * not accepted.</p>
+     */
+    private boolean persistSourceObject(
+            String tenantId,
+            UUID revisionId,
+            SourceObjectReference sourceObject
+    ) {
+        if (sourceObject == null) {
+            return false;
+        }
+        int inserted = jdbc.update("""
+                INSERT INTO document_source_object
+                    (tenant_id, revision_id, storage_id, original_file_name,
+                     media_type, content_length, checksum_sha256, stored_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (tenant_id, revision_id) DO NOTHING
+                """,
+                tenantId,
+                revisionId,
+                sourceObject.storageId(),
+                sourceObject.originalFileName(),
+                sourceObject.mediaType(),
+                sourceObject.contentLength(),
+                sourceObject.checksumSha256(),
+                sourceObject.storedAt().atOffset(ZoneOffset.UTC)
+        );
+        if (inserted == 1) {
+            return true;
+        }
+        String authoritativeStorageId = jdbc.queryForObject("""
+                SELECT storage_id
+                  FROM document_source_object
+                 WHERE tenant_id = ? AND revision_id = ?
+                """, String.class, tenantId, revisionId);
+        if (authoritativeStorageId == null) {
+            throw new IllegalStateException("source object conflict could not be resolved");
+        }
+        return authoritativeStorageId.equals(sourceObject.storageId());
     }
 
     /**
@@ -210,15 +306,44 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                      created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)
                 ON CONFLICT (tenant_id, revision_id, projection_type) DO UPDATE
-                SET status = 'PENDING',
-                    attempt_count = 0,
-                    available_at = EXCLUDED.available_at,
-                    lease_owner = NULL,
-                    lease_until = NULL,
-                    last_error_code = NULL,
+                SET status = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.status
+                        ELSE 'PENDING'
+                    END,
+                    attempt_count = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.attempt_count
+                        ELSE 0
+                    END,
+                    available_at = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.available_at
+                        ELSE EXCLUDED.available_at
+                    END,
+                    lease_owner = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.lease_owner
+                        ELSE NULL
+                    END,
+                    lease_until = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.lease_until
+                        ELSE NULL
+                    END,
+                    requeue_requested = projection_job.status = 'RUNNING',
+                    last_error_code = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.last_error_code
+                        ELSE NULL
+                    END,
                     updated_at = EXCLUDED.updated_at,
-                    completed_at = NULL
-                WHERE projection_job.status IN ('SUCCEEDED', 'DEAD')
+                    completed_at = CASE
+                        WHEN projection_job.status = 'RUNNING'
+                            THEN projection_job.completed_at
+                        ELSE NULL
+                    END
+                WHERE projection_job.status IN ('RUNNING', 'SUCCEEDED', 'DEAD')
                 """,
                 jobId,
                 document.tenantId().value(),
@@ -241,7 +366,7 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
         var document = batch.document();
         String metadataJson = json(document.metadata());
         List<StoredDocumentState> matches = jdbc.query("""
-                SELECT space_id, connector_id, external_id, source_type,
+                SELECT space_id, connector_id, external_id, source_type, status,
                        (title IS DISTINCT FROM ?
                         OR source_uri IS DISTINCT FROM ?
                         OR authority IS DISTINCT FROM ?
@@ -256,6 +381,7 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                         row.getString("connector_id"),
                         row.getString("external_id"),
                         row.getString("source_type"),
+                        DocumentStatus.valueOf(row.getString("status")),
                         row.getBoolean("projection_changed")
                 ),
                 document.title(),
@@ -487,6 +613,7 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
             String connectorId,
             String externalId,
             String sourceType,
+            DocumentStatus status,
             boolean projectionChanged
     ) {
     }
