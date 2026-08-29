@@ -23,6 +23,11 @@ logging:
 
 infinity:
   knowledge:
+    model-tokenizers:
+      zhipu:
+        enabled: ${KNOWLEDGE_ZHIPU_TOKENIZER_ENABLED:true}
+        proxy-host: ${KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_HOST:127.0.0.1}
+        proxy-port: ${KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_PORT:7890}
     ingestion:
       semantic-chunking:
         enabled: ${KNOWLEDGE_SEMANTIC_CHUNKING_ENABLED:true}

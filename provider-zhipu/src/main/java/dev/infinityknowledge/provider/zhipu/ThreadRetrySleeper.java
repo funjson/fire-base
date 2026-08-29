@@ -20,8 +20,7 @@ public final class ThreadRetrySleeper implements RetrySleeper {
             Thread.sleep(duration);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Embedding retry was interrupted", interrupted);
+            throw new IllegalStateException("Provider retry was interrupted", interrupted);
         }
     }
 }
-

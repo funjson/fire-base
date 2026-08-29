@@ -3,6 +3,7 @@ package dev.infinityknowledge.controlplane.config.retrieval;
 import dev.infinityknowledge.controlplane.config.RerankerProperties;
 import dev.infinityknowledge.controlplane.config.ZhipuRerankerProperties;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.model.ModelTokenEstimator;
 import dev.infinityknowledge.spi.retrieval.CoverageJudge;
 import dev.infinityknowledge.spi.retrieval.FeedbackQueryPlanner;
 import dev.infinityknowledge.spi.retrieval.Reranker;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -31,11 +33,13 @@ class RetrievalComponentRegistryConfigurationTest {
 
         var feedback = configuration.feedbackQueryPlannerComponent(
                 planner,
-                feedbackPlannerProperties("glm-planner-v2")
+                feedbackPlannerProperties("glm-planner-v2"),
+                emptyModelTokenEstimatorProvider()
         );
         var coverage = configuration.coverageJudgeComponent(
                 judge,
-                coverageProperties("glm-coverage-v3")
+                coverageProperties("glm-coverage-v3"),
+                emptyModelTokenEstimatorProvider()
         );
         var rerankerProfile = configuration.rerankerComponent(
                 reranker,
@@ -76,6 +80,28 @@ class RetrievalComponentRegistryConfigurationTest {
         assertSame(reranker, profile.implementation());
     }
 
+    @Test
+    void promptTokenizerVersionBecomesPartOfTheExecutedComponentContract() {
+        FeedbackQueryPlanner planner = mock(FeedbackQueryPlanner.class);
+        ModelTokenEstimator estimator = mock(ModelTokenEstimator.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ModelTokenEstimator> provider = mock(ObjectProvider.class);
+        when(provider.orderedStream()).thenReturn(Stream.of(estimator));
+        when(estimator.supports("zhipu", "glm-5.2")).thenReturn(true);
+        when(estimator.version()).thenReturn("paas-v4-tokenizer-v1");
+
+        var component = configuration.feedbackQueryPlannerComponent(
+                planner,
+                feedbackPlannerProperties("glm-5.2"),
+                provider
+        );
+
+        assertEquals(
+                "feedback-prompt-v1:tokenizer-paas-v4-tokenizer-v1",
+                component.version().version()
+        );
+    }
+
     private static FeedbackPlannerProperties feedbackPlannerProperties(String model) {
         return new FeedbackPlannerProperties(
                 true,
@@ -87,6 +113,7 @@ class RetrievalComponentRegistryConfigurationTest {
                 1,
                 Duration.ZERO,
                 24_000,
+                16_384,
                 512,
                 "",
                 0
@@ -104,6 +131,7 @@ class RetrievalComponentRegistryConfigurationTest {
                 1,
                 Duration.ZERO,
                 120_000,
+                65_536,
                 2_048,
                 "",
                 0
@@ -140,6 +168,13 @@ class RetrievalComponentRegistryConfigurationTest {
     @SuppressWarnings("unchecked")
     private static ObjectProvider<EmbeddingSpec> emptyEmbeddingSpecProvider() {
         return mock(ObjectProvider.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<ModelTokenEstimator> emptyModelTokenEstimatorProvider() {
+        ObjectProvider<ModelTokenEstimator> provider = mock(ObjectProvider.class);
+        when(provider.orderedStream()).thenReturn(Stream.empty());
+        return provider;
     }
 
     private static URI endpoint() {

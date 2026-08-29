@@ -17,6 +17,7 @@ import java.time.Duration;
  * @param maxAttempts 包含首次调用的最大尝试次数
  * @param initialBackoff 首次重试等待时间
  * @param maxInputCharacters 单次模型输入字符预算
+ * @param maximumPromptTokens 完整模型消息 Prompt Token 硬预算
  * @param maxOutputTokens 单次模型输出 Token 预算
  * @param proxyHost 可选网络代理主机
  * @param proxyPort 可选网络代理端口
@@ -32,6 +33,7 @@ public record FeedbackPlannerProperties(
         int maxAttempts,
         Duration initialBackoff,
         int maxInputCharacters,
+        int maximumPromptTokens,
         int maxOutputTokens,
         String proxyHost,
         int proxyPort
@@ -39,7 +41,7 @@ public record FeedbackPlannerProperties(
 
     /** 补齐安全默认值并校验反馈规划不会形成无界模型调用。 */
     public FeedbackPlannerProperties {
-        stageTimeout = stageTimeout == null ? Duration.ofSeconds(4) : stageTimeout;
+        stageTimeout = stageTimeout == null ? Duration.ofSeconds(6) : stageTimeout;
         requestTimeout = requestTimeout == null ? Duration.ofSeconds(3) : requestTimeout;
         if (stageTimeout.isZero() || stageTimeout.isNegative()
                 || stageTimeout.compareTo(Duration.ofSeconds(30)) > 0) {
@@ -57,13 +59,19 @@ public record FeedbackPlannerProperties(
                 ? URI.create("https://open.bigmodel.cn/api/paas/v4/chat/completions")
                 : endpoint;
         apiKey = apiKey == null ? "" : apiKey.strip();
-        model = model == null || model.isBlank() ? "glm-4.5-flash" : model.strip();
+        model = model == null || model.isBlank() ? "glm-5.2" : model.strip();
         maxAttempts = maxAttempts < 1 ? 1 : maxAttempts;
         if (maxAttempts > 2) {
             throw new IllegalArgumentException("feedback planner maxAttempts must not exceed 2");
         }
         initialBackoff = initialBackoff == null ? Duration.ZERO : initialBackoff;
         maxInputCharacters = maxInputCharacters < 1 ? 24_000 : maxInputCharacters;
+        maximumPromptTokens = maximumPromptTokens < 1 ? 16_384 : maximumPromptTokens;
+        if (maximumPromptTokens > 500_000) {
+            throw new IllegalArgumentException(
+                    "feedback planner maximumPromptTokens must not exceed 500000"
+            );
+        }
         maxOutputTokens = maxOutputTokens < 1 ? 512 : maxOutputTokens;
         proxyHost = proxyHost == null ? "" : proxyHost.strip();
         if (!proxyHost.isEmpty() && (proxyPort < 1 || proxyPort > 65_535)) {

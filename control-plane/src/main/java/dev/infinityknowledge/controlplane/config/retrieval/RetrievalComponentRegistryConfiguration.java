@@ -2,12 +2,14 @@ package dev.infinityknowledge.controlplane.config.retrieval;
 
 import dev.infinityknowledge.controlplane.config.RerankerProperties;
 import dev.infinityknowledge.controlplane.config.ZhipuRerankerProperties;
+import dev.infinityknowledge.controlplane.config.model.ModelTokenEstimatorResolver;
 import dev.infinityknowledge.retrieval.component.RetrievalComponentRegistry;
 import dev.infinityknowledge.retrieval.component.RetrievalComponentRegistry.CoverageJudgeComponent;
 import dev.infinityknowledge.retrieval.component.RetrievalComponentRegistry.FeedbackQueryPlannerComponent;
 import dev.infinityknowledge.retrieval.component.RetrievalComponentRegistry.RerankerComponent;
 import dev.infinityknowledge.retrieval.component.RetrievalComponentRegistry.TerminologyServiceComponent;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.model.ModelTokenEstimator;
 import dev.infinityknowledge.spi.retrieval.CoverageJudge;
 import dev.infinityknowledge.spi.retrieval.FeedbackQueryPlanner;
 import dev.infinityknowledge.spi.retrieval.Reranker;
@@ -37,14 +39,19 @@ public class RetrievalComponentRegistryConfiguration {
     @ConditionalOnMissingBean(FeedbackQueryPlannerComponent.class)
     FeedbackQueryPlannerComponent feedbackQueryPlannerComponent(
             FeedbackQueryPlanner planner,
-            FeedbackPlannerProperties properties
+            FeedbackPlannerProperties properties,
+            ObjectProvider<ModelTokenEstimator> tokenEstimatorProvider
     ) {
         return new FeedbackQueryPlannerComponent(
                 new RetrievalComponentVersion(
                         "feedback-query-planner",
                         "zhipu",
                         properties.model(),
-                        "feedback-prompt-v1"
+                        promptContract(
+                                "feedback-prompt-v1",
+                                properties.model(),
+                                tokenEstimatorProvider
+                        )
                 ),
                 planner
         );
@@ -56,14 +63,19 @@ public class RetrievalComponentRegistryConfiguration {
     @ConditionalOnMissingBean(CoverageJudgeComponent.class)
     CoverageJudgeComponent coverageJudgeComponent(
             CoverageJudge judge,
-            CoverageJudgeProperties properties
+            CoverageJudgeProperties properties,
+            ObjectProvider<ModelTokenEstimator> tokenEstimatorProvider
     ) {
         return new CoverageJudgeComponent(
                 new RetrievalComponentVersion(
                         "coverage-judge",
                         "zhipu",
                         properties.model(),
-                        "coverage-prompt-v1"
+                        promptContract(
+                                "coverage-prompt-v1",
+                                properties.model(),
+                                tokenEstimatorProvider
+                        )
                 ),
                 judge
         );
@@ -129,5 +141,25 @@ public class RetrievalComponentRegistryConfiguration {
                 coverageJudges,
                 retrievers
         );
+    }
+
+    /**
+     * 精确计数启用后把协议版本写入组件合同；Endpoint、密钥和请求正文永不进入 Trace。
+     */
+    private static String promptContract(
+            String promptVersion,
+            String model,
+            ObjectProvider<ModelTokenEstimator> tokenEstimatorProvider
+    ) {
+        Optional<ModelTokenEstimator> selected = ModelTokenEstimatorResolver.find(
+                tokenEstimatorProvider,
+                "zhipu",
+                model
+        );
+        if (selected.isEmpty()) {
+            return promptVersion;
+        }
+        ModelTokenEstimator estimator = selected.orElseThrow();
+        return promptVersion + ":tokenizer-" + estimator.version();
     }
 }

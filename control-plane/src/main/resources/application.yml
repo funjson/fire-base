@@ -59,6 +59,18 @@ infinity:
       trusted-system-clients: ${KNOWLEDGE_TRUSTED_SYSTEM_CLIENTS:}
     web:
       allowed-origins: ${KNOWLEDGE_WEB_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+    model-tokenizers:
+      zhipu:
+        # 仅用于 GLM 在线 Prompt 预算；没有 offset，禁止用作 Chunk 硬切 Tokenizer。
+        enabled: ${KNOWLEDGE_ZHIPU_TOKENIZER_ENABLED:false}
+        endpoint: ${KNOWLEDGE_ZHIPU_TOKENIZER_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/tokenizer}
+        api-key: ${ZHIPU_API_KEY:}
+        request-timeout: ${KNOWLEDGE_ZHIPU_TOKENIZER_REQUEST_TIMEOUT:1s}
+        max-attempts: ${KNOWLEDGE_ZHIPU_TOKENIZER_MAX_ATTEMPTS:1}
+        initial-backoff: ${KNOWLEDGE_ZHIPU_TOKENIZER_INITIAL_BACKOFF:0s}
+        maximum-input-characters: ${KNOWLEDGE_ZHIPU_TOKENIZER_MAXIMUM_INPUT_CHARACTERS:500000}
+        proxy-host: ${KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_HOST:}
+        proxy-port: ${KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_PORT:0}
     retrieval:
       mode: standard
       observation:
@@ -74,40 +86,43 @@ infinity:
       channel-timeout: 30s
       space-router:
         enabled: ${KNOWLEDGE_SPACE_ROUTER_ENABLED:false}
-        stage-timeout: ${KNOWLEDGE_SPACE_ROUTER_STAGE_TIMEOUT:4s}
+        stage-timeout: ${KNOWLEDGE_SPACE_ROUTER_STAGE_TIMEOUT:6s}
         endpoint: ${KNOWLEDGE_SPACE_ROUTER_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
         api-key: ${ZHIPU_API_KEY:}
-        model: ${KNOWLEDGE_SPACE_ROUTER_MODEL:glm-4.5-flash}
+        model: ${KNOWLEDGE_SPACE_ROUTER_MODEL:glm-5.2}
         request-timeout: ${KNOWLEDGE_SPACE_ROUTER_REQUEST_TIMEOUT:3s}
         max-attempts: ${KNOWLEDGE_SPACE_ROUTER_MAX_ATTEMPTS:1}
         initial-backoff: ${KNOWLEDGE_SPACE_ROUTER_INITIAL_BACKOFF:0s}
         max-input-characters: ${KNOWLEDGE_SPACE_ROUTER_MAX_INPUT_CHARACTERS:32000}
+        maximum-prompt-tokens: ${KNOWLEDGE_SPACE_ROUTER_MAXIMUM_PROMPT_TOKENS:8192}
         max-output-tokens: ${KNOWLEDGE_SPACE_ROUTER_MAX_OUTPUT_TOKENS:512}
         proxy-host: ${KNOWLEDGE_SPACE_ROUTER_PROXY_HOST:}
         proxy-port: ${KNOWLEDGE_SPACE_ROUTER_PROXY_PORT:0}
       feedback-planner:
         enabled: ${KNOWLEDGE_FEEDBACK_PLANNER_ENABLED:false}
-        stage-timeout: ${KNOWLEDGE_FEEDBACK_PLANNER_STAGE_TIMEOUT:4s}
+        stage-timeout: ${KNOWLEDGE_FEEDBACK_PLANNER_STAGE_TIMEOUT:6s}
         endpoint: ${KNOWLEDGE_FEEDBACK_PLANNER_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
         api-key: ${ZHIPU_API_KEY:}
-        model: ${KNOWLEDGE_FEEDBACK_PLANNER_MODEL:glm-4.5-flash}
+        model: ${KNOWLEDGE_FEEDBACK_PLANNER_MODEL:glm-5.2}
         request-timeout: ${KNOWLEDGE_FEEDBACK_PLANNER_REQUEST_TIMEOUT:3s}
         max-attempts: ${KNOWLEDGE_FEEDBACK_PLANNER_MAX_ATTEMPTS:1}
         initial-backoff: ${KNOWLEDGE_FEEDBACK_PLANNER_INITIAL_BACKOFF:0s}
         max-input-characters: ${KNOWLEDGE_FEEDBACK_PLANNER_MAX_INPUT_CHARACTERS:24000}
+        maximum-prompt-tokens: ${KNOWLEDGE_FEEDBACK_PLANNER_MAXIMUM_PROMPT_TOKENS:16384}
         max-output-tokens: ${KNOWLEDGE_FEEDBACK_PLANNER_MAX_OUTPUT_TOKENS:512}
         proxy-host: ${KNOWLEDGE_FEEDBACK_PLANNER_PROXY_HOST:}
         proxy-port: ${KNOWLEDGE_FEEDBACK_PLANNER_PROXY_PORT:0}
       coverage-judge:
         enabled: ${KNOWLEDGE_COVERAGE_JUDGE_ENABLED:false}
-        stage-timeout: ${KNOWLEDGE_COVERAGE_JUDGE_STAGE_TIMEOUT:8s}
+        stage-timeout: ${KNOWLEDGE_COVERAGE_JUDGE_STAGE_TIMEOUT:10s}
         endpoint: ${KNOWLEDGE_COVERAGE_JUDGE_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
         api-key: ${ZHIPU_API_KEY:}
-        model: ${KNOWLEDGE_COVERAGE_JUDGE_MODEL:glm-4.5-flash}
+        model: ${KNOWLEDGE_COVERAGE_JUDGE_MODEL:glm-5.2}
         request-timeout: ${KNOWLEDGE_COVERAGE_JUDGE_REQUEST_TIMEOUT:6s}
         max-attempts: ${KNOWLEDGE_COVERAGE_JUDGE_MAX_ATTEMPTS:1}
         initial-backoff: ${KNOWLEDGE_COVERAGE_JUDGE_INITIAL_BACKOFF:0s}
         max-input-characters: ${KNOWLEDGE_COVERAGE_JUDGE_MAX_INPUT_CHARACTERS:120000}
+        maximum-prompt-tokens: ${KNOWLEDGE_COVERAGE_JUDGE_MAXIMUM_PROMPT_TOKENS:65536}
         max-output-tokens: ${KNOWLEDGE_COVERAGE_JUDGE_MAX_OUTPUT_TOKENS:2048}
         proxy-host: ${KNOWLEDGE_COVERAGE_JUDGE_PROXY_HOST:}
         proxy-port: ${KNOWLEDGE_COVERAGE_JUDGE_PROXY_PORT:0}

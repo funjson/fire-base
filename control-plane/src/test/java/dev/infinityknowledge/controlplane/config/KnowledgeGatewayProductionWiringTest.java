@@ -211,6 +211,7 @@ class KnowledgeGatewayProductionWiringTest {
                 1,
                 Duration.ZERO,
                 24_000,
+                16_384,
                 512,
                 "",
                 0
@@ -240,6 +241,7 @@ class KnowledgeGatewayProductionWiringTest {
                 1,
                 Duration.ZERO,
                 24_000,
+                8_192,
                 512,
                 "",
                 0
@@ -257,6 +259,7 @@ class KnowledgeGatewayProductionWiringTest {
                 1,
                 Duration.ZERO,
                 120_000,
+                65_536,
                 2_048,
                 "",
                 0

@@ -19,13 +19,14 @@ public record CoverageJudgeProperties(
         int maxAttempts,
         Duration initialBackoff,
         int maxInputCharacters,
+        int maximumPromptTokens,
         int maxOutputTokens,
         String proxyHost,
         int proxyPort
 ) {
     /** 补齐保守默认值并禁止无界模型输入。 */
     public CoverageJudgeProperties {
-        stageTimeout = stageTimeout == null ? Duration.ofSeconds(8) : stageTimeout;
+        stageTimeout = stageTimeout == null ? Duration.ofSeconds(10) : stageTimeout;
         requestTimeout = requestTimeout == null ? Duration.ofSeconds(6) : requestTimeout;
         if (stageTimeout.isZero() || stageTimeout.isNegative()
                 || stageTimeout.compareTo(Duration.ofSeconds(60)) > 0) {
@@ -43,7 +44,7 @@ public record CoverageJudgeProperties(
                 ? URI.create("https://open.bigmodel.cn/api/paas/v4/chat/completions")
                 : endpoint;
         apiKey = apiKey == null ? "" : apiKey.strip();
-        model = model == null || model.isBlank() ? "glm-4.5-flash" : model.strip();
+        model = model == null || model.isBlank() ? "glm-5.2" : model.strip();
         maxAttempts = maxAttempts < 1 ? 1 : maxAttempts;
         if (maxAttempts > 2) {
             throw new IllegalArgumentException("coverage judge maxAttempts must not exceed 2");
@@ -53,6 +54,12 @@ public record CoverageJudgeProperties(
         if (maxInputCharacters > 500_000) {
             throw new IllegalArgumentException(
                     "coverage judge maxInputCharacters must not exceed 500000"
+            );
+        }
+        maximumPromptTokens = maximumPromptTokens < 1 ? 65_536 : maximumPromptTokens;
+        if (maximumPromptTokens > 500_000) {
+            throw new IllegalArgumentException(
+                    "coverage judge maximumPromptTokens must not exceed 500000"
             );
         }
         maxOutputTokens = maxOutputTokens < 1 ? 2_048 : maxOutputTokens;

@@ -1,10 +1,14 @@
 package dev.infinityknowledge.controlplane.config.retrieval;
 
+import dev.infinityknowledge.controlplane.config.model.ModelStageBudgetValidator;
+import dev.infinityknowledge.controlplane.config.model.ModelTokenEstimatorResolver;
 import dev.infinityknowledge.provider.zhipu.ThreadRetrySleeper;
 import dev.infinityknowledge.provider.zhipu.ZhipuGenerationConfig;
 import dev.infinityknowledge.provider.zhipu.ZhipuJsonGenerationClient;
 import dev.infinityknowledge.provider.zhipu.ZhipuSpaceRouter;
+import dev.infinityknowledge.spi.model.ModelTokenEstimator;
 import dev.infinityknowledge.spi.retrieval.SpaceRouter;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -32,7 +36,10 @@ public class SpaceRouterConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(SpaceRouter.class)
-    SpaceRouter spaceRouter(SpaceRouterProperties properties) {
+    SpaceRouter spaceRouter(
+            SpaceRouterProperties properties,
+            ObjectProvider<ModelTokenEstimator> tokenEstimatorProvider
+    ) {
         if (properties.apiKey().isBlank()) {
             throw new IllegalStateException(
                     "space router apiKey is required when model routing is enabled"
@@ -55,15 +62,30 @@ public class SpaceRouterConfiguration {
                 properties.maxAttempts(),
                 properties.initialBackoff(),
                 properties.maxInputCharacters(),
+                properties.maximumPromptTokens(),
                 properties.maxOutputTokens()
         );
+        ModelTokenEstimator tokenEstimator = ModelTokenEstimatorResolver.require(
+                tokenEstimatorProvider,
+                "zhipu",
+                properties.model(),
+                "space router"
+        );
+        ModelStageBudgetValidator.requireFits(
+                properties.stageTimeout(),
+                tokenEstimator.maximumLatency(),
+                generation.maximumLatency(),
+                "space router"
+        );
+        ZhipuJsonGenerationClient client = new ZhipuJsonGenerationClient(
+                generation,
+                http.build(),
+                mapper,
+                new ThreadRetrySleeper(),
+                tokenEstimator
+        );
         return new ZhipuSpaceRouter(
-                new ZhipuJsonGenerationClient(
-                        generation,
-                        http.build(),
-                        mapper,
-                        new ThreadRetrySleeper()
-                ),
+                client,
                 mapper,
                 properties.model()
         );

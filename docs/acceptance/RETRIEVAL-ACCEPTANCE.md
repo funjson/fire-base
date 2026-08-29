@@ -54,6 +54,9 @@ $env:KNOWLEDGE_SPACE_ROUTER_ENABLED = 'true'
 $env:KNOWLEDGE_COVERAGE_JUDGE_ENABLED = 'true'
 $env:KNOWLEDGE_FEEDBACK_PLANNER_ENABLED = 'true'
 $env:KNOWLEDGE_RERANKER_ENABLED = 'true'
+$env:KNOWLEDGE_ZHIPU_TOKENIZER_ENABLED = 'true'
+# 默认生成与计数都使用 glm-5.2；若切到 glm-5.1，只修改各生成阶段的 MODEL 变量，
+# Tokenizer 会直接读取同一次生成请求的 modelId，不需要第二份 tokenizerModel 配置。
 
 if ([string]::IsNullOrWhiteSpace($env:KNOWLEDGE_RETRIEVAL_FINGERPRINT_SECRET)) {
   throw '受控验收必须由秘密管理系统注入至少 32 字节的查询指纹密钥'
@@ -65,7 +68,8 @@ java -jar control-plane\target\control-plane-0.1.0-SNAPSHOT.jar `
   --spring.profiles.active=acceptance
 ```
 
-若本机需要代理，同时设置对应的 `KNOWLEDGE_*_PROXY_HOST/PORT`。不要在日常开发中反复启动
+若本机需要代理，同时设置对应的 `KNOWLEDGE_*_PROXY_HOST/PORT`，其中 Prompt 计数使用
+`KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_HOST/PORT`。不要在日常开发中反复启动
 完整环境或批量调用模型。只验收确定性主链时可以关闭四个模型开关，并执行第 13 节的聚焦测试。
 
 按 [API 验收说明](../API.md) 获取管理员 Token，然后保留后续命令需要的变量：
@@ -131,8 +135,8 @@ $history = Invoke-RestMethod `
 $config = $current.configuration
 $config.coverage.enabled = $true
 $config.coverage.providerId = 'zhipu'
-$config.coverage.modelId = 'glm-4.5-flash'
-$config.coverage.promptVersion = 'coverage-v1'
+$config.coverage.modelId = 'glm-5.2'
+$config.coverage.promptVersion = 'coverage-prompt-v1:tokenizer-paas-v4-tokenizer-v1'
 $config.maximumRetrievalAttempts = 4
 $config.chainNodeEnables.GAP_QUERY = $true
 $config.chainNodeEnables.PRF = $true

@@ -1,5 +1,9 @@
 package dev.infinityknowledge.provider.zhipu;
 
+import dev.infinityknowledge.spi.model.ModelMessage;
+import dev.infinityknowledge.spi.model.ModelTokenEstimate;
+import dev.infinityknowledge.spi.model.ModelTokenEstimateRequest;
+import dev.infinityknowledge.spi.model.ModelTokenEstimator;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -9,6 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -23,6 +28,7 @@ public final class ZhipuJsonGenerationClient {
     private final HttpClient httpClient;
     private final JsonMapper jsonMapper;
     private final RetrySleeper sleeper;
+    private final ModelTokenEstimator tokenEstimator;
 
     public ZhipuJsonGenerationClient(
             ZhipuGenerationConfig config,
@@ -30,10 +36,32 @@ public final class ZhipuJsonGenerationClient {
             JsonMapper jsonMapper,
             RetrySleeper sleeper
     ) {
+        this(config, httpClient, jsonMapper, sleeper, null);
+    }
+
+    /**
+     * 创建启用同模型精确 Prompt Token 预算的结构化生成客户端。
+     *
+     * <p>Estimator 不保存独立 tokenizerModel；构造时即验证它支持生成配置中的模型。</p>
+     */
+    public ZhipuJsonGenerationClient(
+            ZhipuGenerationConfig config,
+            HttpClient httpClient,
+            JsonMapper jsonMapper,
+            RetrySleeper sleeper,
+            ModelTokenEstimator tokenEstimator
+    ) {
         this.config = Objects.requireNonNull(config, "config must not be null");
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient must not be null");
         this.jsonMapper = Objects.requireNonNull(jsonMapper, "jsonMapper must not be null");
         this.sleeper = Objects.requireNonNull(sleeper, "sleeper must not be null");
+        this.tokenEstimator = tokenEstimator;
+        if (tokenEstimator != null
+                && !tokenEstimator.supports(ZhipuModelTokenEstimator.PROVIDER_ID, config.model())) {
+            throw new IllegalArgumentException(
+                    "prompt token estimator does not support the configured generation model"
+            );
+        }
     }
 
     /**
@@ -42,11 +70,16 @@ public final class ZhipuJsonGenerationClient {
     public JsonNode generate(String instruction, String input) {
         instruction = requireText(instruction, "instruction", 32_000);
         input = requireText(input, "input", config.maxInputCharacters());
+        List<ModelMessage> messages = List.of(
+                new ModelMessage(ModelMessage.Role.SYSTEM, instruction),
+                new ModelMessage(ModelMessage.Role.USER, input)
+        );
+        validatePromptBudget(messages);
         Duration backoff = config.initialBackoff();
         for (int attempt = 1; attempt <= config.maxAttempts(); attempt++) {
             try {
                 HttpResponse<String> response = httpClient.send(
-                        request(instruction, input),
+                        request(messages),
                         HttpResponse.BodyHandlers.ofString()
                 );
                 if (response.statusCode() >= 200 && response.statusCode() < 300) {
@@ -84,18 +117,59 @@ public final class ZhipuJsonGenerationClient {
         return config.maxInputCharacters();
     }
 
-    private HttpRequest request(String instruction, String input) {
-        Map<String, Object> payload = Map.of(
-                "model", config.model(),
-                "messages", List.of(
-                        Map.of("role", "system", "content", instruction),
-                        Map.of("role", "user", "content", input)
-                ),
-                "response_format", Map.of("type", "json_object"),
-                "temperature", 0.1D,
-                "max_tokens", config.maxOutputTokens(),
-                "stream", false
-        );
+    private void validatePromptBudget(List<ModelMessage> messages) {
+        if (tokenEstimator == null) {
+            return;
+        }
+        final ModelTokenEstimate estimate;
+        try {
+            estimate = tokenEstimator.estimate(new ModelTokenEstimateRequest(
+                    ZhipuModelTokenEstimator.PROVIDER_ID,
+                    config.model(),
+                    messages
+            ));
+        } catch (RuntimeException estimationFailure) {
+            /*
+             * 第三方 Estimator 的异常链可能携带 Prompt 或响应片段，因此这里只转换为
+             * 稳定失败类别，不把原异常挂到业务异常上。
+             */
+            throw new GenerationProviderException(
+                    "Zhipu generation prompt token estimation failed"
+            );
+        }
+        if (estimate == null
+                || !tokenEstimator.version().equals(estimate.estimatorVersion())) {
+            throw new GenerationProviderException(
+                    "Zhipu generation prompt token estimator returned an invalid contract"
+            );
+        }
+        if (!estimate.exact()) {
+            throw new GenerationProviderException(
+                    "Zhipu generation requires an exact prompt token estimate"
+            );
+        }
+        if (estimate.promptTokens() > config.maximumPromptTokens()) {
+            throw new GenerationProviderException(
+                    "Zhipu generation prompt exceeds the configured token budget"
+            );
+        }
+    }
+
+    private HttpRequest request(List<ModelMessage> messages) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("model", config.model());
+        payload.put("messages", messages.stream().map(message -> Map.of(
+                "role", message.role().wireName(),
+                "content", message.content()
+        )).toList());
+        payload.put("response_format", Map.of("type", "json_object"));
+        if (tokenEstimator != null) {
+            /* 检索短任务关闭 GLM-5.x 默认思考，避免预算外延迟；旧 Graph/Wiki 调用保持原协议。 */
+            payload.put("thinking", Map.of("type", "disabled"));
+        }
+        payload.put("temperature", 0.1D);
+        payload.put("max_tokens", config.maxOutputTokens());
+        payload.put("stream", false);
         final String body;
         try {
             body = jsonMapper.writeValueAsString(payload);

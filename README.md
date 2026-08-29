@@ -73,6 +73,10 @@ OIDC / Tenant / Principal / Space ACL
 - Knowledge Runtime 保持无会话状态；调用方可以显式提交有界会话摘要和最近轮次，
   可选智谱 Query Planner 生成独立查询/同义变体，原查询始终保留且总候选预算不会
   随变体数成倍放大；
+- GLM 在线规划、Space 排序和 Coverage 默认使用 `glm-5.2`，可切换 `glm-5.1`；
+  启用这些模型阶段时必须同时启用智谱远程 Prompt Token 计数。计数模型直接取生成请求，
+  不存在可独立修改的 tokenizerModel；该接口没有字符 offset，绝不进入 Chunk Tokenizer 列表。
+  三个检索短任务显式关闭 GLM 深度思考，计数或预算校验失败时不再发送生成请求；
 - 可选 Embedding Cosine 或智谱专用 `/rerank` 模型精排；模型成功时 Evidence
   `relevance` 使用本次查询内的最终模型分数，失败/超时回退 RRF 顺序；
 - Projection heartbeat、fencing token、dirty/requeue、退避、死信和重建；
@@ -147,7 +151,7 @@ HA、容量、灾备验收完成。已执行证据、延期门禁和明确未支
 | `knowledge-compiler` | 可追溯 Wiki 编译 |
 | `knowledge-evaluation` | 检索评测、抽取 Golden Dataset 与基线门禁 |
 | `connector-obsidian` | Obsidian Vault Provider |
-| `provider-zhipu` | GLM Embedding、Query Planner、专用 Rerank、Graph/Wiki 生成适配器 |
+| `provider-zhipu` | GLM Embedding、Query Planner、Prompt Token 计数、专用 Rerank、Graph/Wiki 生成适配器 |
 | `store-postgres` | 权威事实、治理、任务、Wiki、评测、Trace 和 Audit |
 | `store-elasticsearch` | BM25 投影/检索 |
 | `store-milvus` | Vector 投影/检索 |
@@ -214,6 +218,8 @@ $env:KNOWLEDGE_EMBEDDING_PROXY_HOST = '127.0.0.1'
 $env:KNOWLEDGE_EMBEDDING_PROXY_PORT = '7890'
 $env:KNOWLEDGE_FEEDBACK_PLANNER_PROXY_HOST = '127.0.0.1'
 $env:KNOWLEDGE_FEEDBACK_PLANNER_PROXY_PORT = '7890'
+$env:KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_HOST = '127.0.0.1'
+$env:KNOWLEDGE_ZHIPU_TOKENIZER_PROXY_PORT = '7890'
 $env:KNOWLEDGE_RERANKER_PROXY_HOST = '127.0.0.1'
 $env:KNOWLEDGE_RERANKER_PROXY_PORT = '7890'
 $env:KNOWLEDGE_GRAPH_PROXY_HOST = '127.0.0.1'

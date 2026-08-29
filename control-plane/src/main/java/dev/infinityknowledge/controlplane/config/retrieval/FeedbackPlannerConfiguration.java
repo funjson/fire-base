@@ -1,10 +1,14 @@
 package dev.infinityknowledge.controlplane.config.retrieval;
 
+import dev.infinityknowledge.controlplane.config.model.ModelStageBudgetValidator;
+import dev.infinityknowledge.controlplane.config.model.ModelTokenEstimatorResolver;
 import dev.infinityknowledge.provider.zhipu.ThreadRetrySleeper;
 import dev.infinityknowledge.provider.zhipu.ZhipuFeedbackQueryPlanner;
 import dev.infinityknowledge.provider.zhipu.ZhipuGenerationConfig;
 import dev.infinityknowledge.provider.zhipu.ZhipuJsonGenerationClient;
+import dev.infinityknowledge.spi.model.ModelTokenEstimator;
 import dev.infinityknowledge.spi.retrieval.FeedbackQueryPlanner;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -32,7 +36,10 @@ public class FeedbackPlannerConfiguration {
     /** 使用受控模型端点生成固定 Chain 已选节点的一条查询变体。 */
     @Bean
     @ConditionalOnMissingBean(FeedbackQueryPlanner.class)
-    FeedbackQueryPlanner feedbackQueryPlanner(FeedbackPlannerProperties properties) {
+    FeedbackQueryPlanner feedbackQueryPlanner(
+            FeedbackPlannerProperties properties,
+            ObjectProvider<ModelTokenEstimator> tokenEstimatorProvider
+    ) {
         if (properties.apiKey().isBlank()) {
             throw new IllegalStateException(
                     "feedback planner apiKey is required when model planning is enabled"
@@ -55,15 +62,30 @@ public class FeedbackPlannerConfiguration {
                 properties.maxAttempts(),
                 properties.initialBackoff(),
                 properties.maxInputCharacters(),
+                properties.maximumPromptTokens(),
                 properties.maxOutputTokens()
         );
+        ModelTokenEstimator tokenEstimator = ModelTokenEstimatorResolver.require(
+                tokenEstimatorProvider,
+                "zhipu",
+                properties.model(),
+                "feedback planner"
+        );
+        ModelStageBudgetValidator.requireFits(
+                properties.stageTimeout(),
+                tokenEstimator.maximumLatency(),
+                generation.maximumLatency(),
+                "feedback planner"
+        );
+        ZhipuJsonGenerationClient client = new ZhipuJsonGenerationClient(
+                generation,
+                http.build(),
+                mapper,
+                new ThreadRetrySleeper(),
+                tokenEstimator
+        );
         return new ZhipuFeedbackQueryPlanner(
-                new ZhipuJsonGenerationClient(
-                        generation,
-                        http.build(),
-                        mapper,
-                        new ThreadRetrySleeper()
-                ),
+                client,
                 mapper,
                 properties.model()
         );
