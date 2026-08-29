@@ -1,6 +1,6 @@
 package dev.infinityknowledge.controlplane.security;
 
-import dev.infinityknowledge.controlplane.application.KnowledgeGovernanceService;
+import dev.infinityknowledge.controlplane.application.governance.KnowledgeGovernanceService;
 import dev.infinityknowledge.domain.identity.PrincipalContext;
 import dev.infinityknowledge.spi.access.KnowledgeAccessDeniedException;
 import jakarta.servlet.FilterChain;

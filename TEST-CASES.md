@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档用途 | 维护前端、API、权限、富文档、检索、Graph、Wiki、评测、连接器及观测回归用例 |
-| 当前版本 | 2.0 |
-| 基线日期 | 2026-08-11 |
+| 文档用途 | 维护前端、API、权限、数据抽取、富文档、检索、Graph、Wiki、评测、连接器及观测回归用例 |
+| 当前版本 | 3.0 |
+| 基线日期 | 2026-08-22 |
 | 默认前端 | `http://localhost:5173` |
 | 默认后端 | `http://localhost:8080` |
 | 默认 Keycloak | `http://localhost:8180` |
@@ -51,7 +51,7 @@
 | ENV-003 | P0 | OIDC Discovery | 访问 Realm `.well-known/openid-configuration` | HTTP 200，Issuer 与后端配置一致 |
 | ENV-004 | P1 | Elasticsearch 健康 | 查询 ES Cluster Health | 集群可用，状态非 red |
 | ENV-005 | P1 | Milvus 健康 | 查询 Milvus Health | 服务健康并可建立连接 |
-| ENV-006 | P1 | 数据库迁移 | 查看后端启动日志与 Flyway 表 | V1–V15 均已成功，应用无待执行迁移；旧库包含 RUNNING Run 时 V10 仍可升级，V15 所有权约束可收敛 |
+| ENV-006 | P1 | 数据库迁移 | 查看后端启动日志与 Flyway 表 | 预发布空库 V1–V18 连续成功，应用无待执行迁移；V17/V18 的处理配置、SourceAsset 与任务约束存在 |
 | ENV-007 | P0 | Keycloak 配置容器可移植性 | 在 Keycloak 健康后执行 `docker compose --profile acceptance run --rm keycloak-config` | 退出码为 0；不依赖官方镜像中未提供的额外 CLI；Client、角色、用户和 Mapper 均完成配置 |
 | ENV-008 | P1 | 后台调度隔离 | 阻塞一个 Graph projection，同时观察 Connector/Evaluation recovery | 三类轮询由至少 3 个有界 scheduler 线程执行；长投影不饿死两个恢复任务，不创建无界线程 |
 
@@ -91,8 +91,8 @@
 
 | ID | 优先级 | 测试场景 | 步骤 | 预期结果 |
 |---|---:|---|---|---|
-| ING-001 | P0 | 创建知识空间 | 管理员创建公共测试空间 | HTTP 204，管理列表可见 |
-| ING-002 | P1 | 重复空间 ID | 使用相同 ID 再次创建 | 返回稳定冲突或幂等结果，不产生两条空间 |
+| ING-001 | P0 | 创建知识空间 | 管理员读取能力目录并携带完整处理配置创建公共测试空间 | HTTP 204；Space、版本 1 配置、创建者 ACL 和 API Connector 在同一事务落库，管理列表可见 |
+| ING-002 | P0 | 重复空间 ID | 先重复完全相同请求；再禁用原配置引用的可选能力并重复同一请求；最后提交相同 ID 的不同名称、处理配置及非活动 Space | 两次完全相同请求均幂等 204；其余稳定 409，不覆盖配置、不改名、不复活旧 Space，也不产生第二条空间 |
 | ING-003 | P1 | 空空间 ID | 创建 `spaceId=""` | HTTP 400，含稳定错误码和 requestId |
 | ING-004 | P1 | 非法空间 ID | 使用超长或非法字符 ID | HTTP 400，不进入数据库 |
 | ING-005 | P0 | 写入 Markdown | 写入公共测试文档 | 返回 documentId、revisionId、chunkCount |
@@ -107,7 +107,23 @@
 | ING-014 | P1 | Source URI | 写入合法及非法 URI | 合法保存；非法输入返回验证错误 |
 | ING-015 | P1 | Source URI 配置 | 扩展 `KNOWLEDGE_ALLOWED_SOURCE_SCHEMES` 后写入新来源协议 | 仅配置中的绝对 URI 被接受，浏览器链接白名单不随之隐式扩大 |
 | ING-016 | P1 | 语言标签规范化 | 分别写入合法、大小写不一致和非法 BCP 47 标签 | 合法标签按 BCP 47 规范化；非法标签 HTTP 400，不写入修订 |
-| ING-017 | P1 | 处理契约变更 | 正文不变，修改 language、parser 版本或 Chunk 预算后重新发布；另用大小写变体提交 Markdown media type | 处理契约变化生成新的不可变修订和 Chunk；media type 被规范化，不因大小写产生伪修订 |
+| ING-017 | P1 | 处理契约变更 | 使用新 `spaceId` 和新的 Parser/Chunk 配置创建 Space，再摄取同一正文；另用大小写变体提交 Markdown media type | 新 Space 产生独立修订与 Chunk，旧 Space 配置和数据不变；media type 被规范化，不因大小写产生伪处理身份 |
+| ING-018 | P0 | TEST_ONLY 多文件抽取 | 在 Space 数据抽取页一次选择至少两个非 ZIP 文件并运行 | 返回单 Run/N 个 Item；真实执行 Parse/Clean/Chunk；不创建 Document、Revision 或 Projection Job |
+| ING-019 | P0 | 正式多文件 INGEST | 为每个文件填写 externalId、title、authority 后提交 | 202 返回；逐文件发布 Document/Revision/Element/Chunk，业务身份与输入顺序一致 |
+| ING-020 | P0 | Space 单活动任务 | 同一 Space 的首个 Run 未结束时再次创建 | 第二个请求 409；其他 Space 不受影响 |
+| ING-021 | P0 | 取消保留原件 | 取消 QUEUED/RUNNING Run，再下载各 Item 原件 | Run/Item 进入 CANCELLED；MinIO 原件仍可授权下载，不产生正式知识事实 |
+| ING-022 | P0 | 重复与冲突 | 先重复相同 externalId+SHA，再以相同 externalId 提交不同内容 | 相同内容 `SKIPPED_DUPLICATE` 并复用输出；不同内容 `EXTERNAL_ID_CONFLICT`，不覆盖既有修订和治理属性 |
+| ING-023 | P0 | 不可变配置快照 | 分别用 Space 配置和 `testConfig` 创建 Run 后执行 | Worker 只使用各自创建时快照；实际 Pipeline/Normalizer/Parser/Cleaner/Chunker/Tokenizer 合同、processorVersion 与总指纹可追溯；测试配置不写回 Space |
+| ING-024 | P1 | 分层诊断与有界预览 | 完成 TEST_ONLY 后查看 Item 详情 | 展示 Parse/Clean/Chunk 耗时、Clean 去向、16 项 Chunk 诊断、Element/Chunk/SourceSpan 预览；不展示向量或模型原响应 |
+| ING-025 | P0 | Golden Dataset 门禁 | 选择受版本控制 Dataset 运行，再与同 Space Baseline 比较 | Observation 由真实 ExtractionEngine 产生；Run 成功与 Gate 通过分离，五项硬门禁任一失败即不可发布 |
+| ING-026 | P1 | Parser 能力目录 | 默认部署和启用 Docling 后分别查看 PDF/DOCX Parser | 每种格式恰有一个默认 Parser；Docling PDF 可选且非默认，DOCX 禁用并显示稳定原因 |
+| ING-027 | P1 | Tokenizer 两态 | 默认关闭后查看，再启用固定 tokenizer.json/SHA 并运行 TEST_ONLY | 禁用态可见不可选；启用态 exact/profile/版本可查，Run 快照使用选中 ID；不冒充 Serving 配对 |
+| ING-028 | P0 | 原件下载安全 | 对成功、失败、取消 Item 下载原件并校验字节/SHA/Header | 字节与 SHA 一致；attachment/no-store/nosniff；不暴露 Bucket、Key、storageId |
+| ING-029 | P0 | 创建失败原子回滚 | 使用不可用能力或制造配置写入失败后创建 Space | 请求明确失败；Space、配置、ACL 和 Connector 均无残留 |
+| ING-030 | P0 | 配置创建后只读 | 创建 Space 后读取配置并尝试调用旧 PUT | GET 与创建值一致；PUT 路由不存在，执行期缺配置 fail-closed，不补写部署默认值 |
+| ING-031 | P1 | 能力目录安全 | 无 Space 时以管理员和非管理员访问全局能力目录 | 管理员可见默认值与可用性；非管理员拒绝；响应不含 Endpoint、凭据或部署秘密 |
+| ING-032 | P0 | 同名实现漂移栅栏 | 以实现 v1 创建 Space/排队 Run，再用相同 ID 的 Parser、Cleaner、Chunker 或 Tokenizer v2 创建服务实例 | Space 只读页显示当前部署不匹配；新 Run 在读取/保存原件前 409；已排队 Run 在任何 Item、OSS 读取或模型调用前整单失败，错误码为 `PROCESSING_CONTRACT_MISMATCH` |
+| ING-033 | P0 | 发布与投影合同边界 | 在抽取后篡改发布所带合同指纹；另在 Adapter 升级/移除后执行旧修订待处理投影 | 发布事务不写 Document/Revision/Element/Chunk/Projection Job；旧投影只按 Space 固化合同计算代际并可继续，不调用当前 Parser/Cleaner/Chunker |
 
 ## 7. 索引投影
 
@@ -155,7 +171,7 @@
 |---|---:|---|---|---|
 | UI-001 | P0 | Dashboard | 管理员打开首页 | 指标卡和趋势/状态区域正常，无 API 错误 |
 | UI-002 | P1 | 空间列表 | 打开知识空间页面 | 数据与 API 一致，加载/空/错误状态完整 |
-| UI-003 | P1 | 创建空间 | 在页面创建空间 | 成功提示并刷新列表 |
+| UI-003 | P0 | 创建空间 | 在页面选择 Parser、Cleaner、Chunker、Tokenizer 后创建空间 | 成功提示并刷新列表；请求携带完整配置，失败时保留用户输入 |
 | UI-004 | P1 | 文档列表 | 打开文档页面并筛选 | 列表、状态、修订、投影信息正确 |
 | UI-005 | P1 | 文档上传 | 使用页面提交 Markdown | 成功后显示文档及投影状态 |
 | UI-006 | P1 | Chunk Inspector | 打开文档 Chunk | 顺序、章节、内容及 metadata 正确 |
@@ -174,6 +190,9 @@
 | UI-014 | P2 | 响应式布局 | 测试常见桌面及窄屏宽度 | 核心操作可用，无严重遮挡 |
 | UI-015 | P2 | 键盘与可访问性 | 使用 Tab/Enter 操作主要流程 | 焦点可见，表单有可识别 Label |
 | UI-016 | P0 | 文档管理页面首次加载 | 管理员直接打开 `/documents`，不提供筛选条件 | 文档列表 API 返回 200，页面显示数据或空状态，不出现通用错误 |
+| UI-039 | P0 | 数据抽取工作台 | 从 Space 卡片进入数据抽取页 | 能创建 TEST_ONLY/INGEST、轮询终态、查看逐文件身份/诊断/预览/Gate 并下载原件 |
+| UI-040 | P1 | 文档处理能力可见性 | 打开创建 Space 页面和已有 Space 的只读配置 | 显示所有已知 Parser、Chunker 和 Tokenizer；不可用项禁用并显示原因，不把能力目录数量误报为可用数量 |
+| UI-041 | P0 | 本次测试配置 | 在测试广场调整参数并运行，再返回查看 Space 配置 | 请求使用 `testConfig`；结果保存完整快照；Space 配置保持创建值且页面没有保存/提升入口 |
 
 ## 10. 评测体系
 
@@ -232,7 +251,9 @@
 | ID | 能力 | 当前预期 |
 |---|---|---|
 | PLAN-001 | Excel/PPT/图片 OCR | 未实现 |
-| PLAN-002 | Query Rewrite/Multi-query/父子相邻 Chunk | 未实现 |
+| PLAN-002 | Query Decomposition、多跳、父子相邻 Chunk | 未实现；Query Rewrite/Multi-query 已作为可选能力实现 |
+| PLAN-009 | 第三方 Chunker与动态 options Schema | 未实现；Provider/Token Counter 注册链已具备 |
+| PLAN-010 | 目标 Embedding Serving Tokenizer 配对 | 未配置；本地固定 Tokenizer Adapter 已验收 |
 | PLAN-003 | Owner/有效期/保密等级/组织审核完整治理 | 未实现 |
 | PLAN-004 | Wiki Claim/Link/Diff/回滚/影响分析/自动重编译 | 未实现 |
 | PLAN-005 | Graph 人工标注集和 Entity/Relation/Provenance 指标 | 未实现 |
@@ -376,3 +397,4 @@
 | E2E-001 | P0 | Admin 主路径 | 单 Worker Playwright 登录并完成空间、文件、检索、Wiki/Graph/Evaluation/Audit | 无白屏；关键 API/页面断言通过；失败保留截图/Trace |
 | E2E-002 | P0 | Reader 权限路径 | Reader 登录并遍历导航、检索、原文件访问 | 仅可见授权能力；管理路由和跨空间数据不可见 |
 | E2E-003 | P1 | 不自动启服 | 在服务未启动时运行 Playwright list/test | `--list` 不启服务；test 明确失败而不拉起 Docker/Java/浏览器下载 |
+| E2E-004 | P0 | 抽取工作台 | 验证创建时固化配置，并真实运行多文件 TEST_ONLY、临时测试配置、精确 Tokenizer、取消、INGEST 成功/重复/冲突 | 相关串行场景全部读取真实 API；Space 配置保持不变，数据库、OSS、投影与页面结果一致 |

@@ -23,6 +23,11 @@
         </dependency>
         <dependency>
             <groupId>dev.infinityknowledge</groupId>
+            <artifactId>knowledge-retrieval</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
             <artifactId>knowledge-runtime</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -34,6 +39,16 @@
         <dependency>
             <groupId>dev.infinityknowledge</groupId>
             <artifactId>knowledge-ingestion</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
+            <artifactId>parser-docling</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
+            <artifactId>tokenizer-huggingface</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -74,6 +89,11 @@
         <dependency>
             <groupId>dev.infinityknowledge</groupId>
             <artifactId>store-minio</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.infinityknowledge</groupId>
+            <artifactId>knowledge-jobs</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

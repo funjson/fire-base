@@ -1,6 +1,6 @@
 package dev.infinityknowledge.controlplane.security;
 
-import dev.infinityknowledge.controlplane.api.RequestCorrelationFilter;
+import dev.infinityknowledge.controlplane.api.common.RequestCorrelationFilter;
 import dev.infinityknowledge.domain.audit.MutationAuditEvent;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.spi.audit.AuditPage;

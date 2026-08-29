@@ -1,0 +1,4 @@
+# 文本 Corpus 的 UTF-16 偏移依赖稳定换行；二进制 Corpus 不应用这些规则。
+/knowledge-evaluation/src/main/resources/extraction-acceptance/sources/*.md text eol=lf
+/knowledge-evaluation/src/main/resources/extraction-acceptance/sources/*.txt text eol=lf
+/knowledge-evaluation/src/main/resources/extraction-acceptance/sources/*.html text eol=lf

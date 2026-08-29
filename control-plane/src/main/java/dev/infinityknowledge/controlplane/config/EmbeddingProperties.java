@@ -6,10 +6,11 @@ import java.net.URI;
 import java.time.Duration;
 
 /**
- * GLM embedding and immutable vector-generation settings.
+ * 定义 GLM Embedding 与不可变向量代际配置。
  */
 @ConfigurationProperties(prefix = "infinity.knowledge.embedding")
 public record EmbeddingProperties(
+        boolean enabled,
         String provider,
         String model,
         int dimensions,
@@ -25,7 +26,7 @@ public record EmbeddingProperties(
 ) {
 
     /**
-     * Applies safe operational defaults while leaving credentials external.
+     * 补齐安全运行默认值，凭据仍只允许从外部配置注入。
      */
     public EmbeddingProperties {
         provider = defaultText(provider, "zhipu");

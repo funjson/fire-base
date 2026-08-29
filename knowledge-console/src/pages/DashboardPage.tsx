@@ -73,7 +73,7 @@ export function DashboardPage() {
         <Metric icon={Blocks} label="知识空间" value={value.spaces} />
         <Metric icon={BookOpen} label="活动文档" value={value.activeDocuments} />
         <Metric icon={FileStack} label="知识块" value={value.chunks} />
-        <Metric icon={Cable} label="连接器" value={value.connectors} />
+        <Metric icon={Cable} label="外部数据源" value={value.connectors} />
         <Metric
           icon={FlaskConical}
           label="评测运行"

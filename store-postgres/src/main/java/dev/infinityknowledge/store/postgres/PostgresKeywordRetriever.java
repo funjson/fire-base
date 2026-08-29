@@ -1,14 +1,19 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
+import dev.infinityknowledge.spi.retrieval.RetrievalComponentVersion;
 import dev.infinityknowledge.spi.retrieval.Retriever;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Arrays;
 import java.util.List;
@@ -24,6 +29,8 @@ import java.util.UUID;
  */
 public final class PostgresKeywordRetriever implements Retriever {
 
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
     private static final String BASE_SQL = """
             WITH scored AS (
                 SELECT c.id AS chunk_id,
@@ -35,6 +42,7 @@ public final class PostgresKeywordRetriever implements Retriever {
                        d.source_uri,
                        d.authority,
                        c.content,
+                       c.source_spans_json::text AS source_spans_json,
                        COALESCE((
                            SELECT string_agg(value, chr(31))
                            FROM jsonb_array_elements_text(c.section_path_json)
@@ -69,7 +77,7 @@ public final class PostgresKeywordRetriever implements Retriever {
             %s
             )
             SELECT chunk_id, tenant_id, space_id, document_id, revision_id,
-                   title, source_uri, authority, content, section_path,
+                   title, source_uri, authority, content, source_spans_json, section_path,
                    LEAST(raw_score, 0.999999) AS score
             FROM scored
             WHERE raw_score > 0
@@ -86,6 +94,17 @@ public final class PostgresKeywordRetriever implements Retriever {
      */
     public PostgresKeywordRetriever(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc must not be null");
+    }
+
+    /** 返回 PostgreSQL 全文召回的稳定执行合同。 */
+    @Override
+    public RetrievalComponentVersion componentVersion() {
+        return new RetrievalComponentVersion(
+                "retriever-keyword",
+                "postgresql",
+                "fts-websearch",
+                "v1"
+        );
     }
 
     /**
@@ -151,7 +170,8 @@ public final class PostgresKeywordRetriever implements Retriever {
                         Map.of(
                                 "retriever", "postgresql-fts",
                                 "authority", Integer.toString(resultSet.getInt("authority"))
-                        )
+                        ),
+                        sourceSpans(resultSet.getString("source_spans_json"))
                 )
         );
         return List.copyOf(candidates);
@@ -173,5 +193,18 @@ public final class PostgresKeywordRetriever implements Retriever {
             return List.of();
         }
         return Arrays.stream(value.split("\u001F", -1)).toList();
+    }
+
+    private static List<ChunkSourceSpan> sourceSpans(String value) {
+        try {
+            return value == null || value.isBlank()
+                    ? List.of()
+                    : JSON.readValue(
+                            value,
+                            new TypeReference<List<ChunkSourceSpan>>() { }
+                    );
+        } catch (JacksonException failure) {
+            throw new IllegalStateException("stored chunk source spans are invalid", failure);
+        }
     }
 }

@@ -2,6 +2,7 @@ package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.document.DocumentStatus;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.document.KnowledgeDocument;
 import dev.infinityknowledge.domain.document.SourceDescriptor;
@@ -25,7 +26,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Loads exact immutable revisions from PostgreSQL for background projection.
+ * 从 PostgreSQL 加载精确的不可变修订，供后台投影使用。
  */
 public final class PostgresProjectionSourceStore implements ProjectionSourceStore {
 
@@ -33,14 +34,14 @@ public final class PostgresProjectionSourceStore implements ProjectionSourceStor
     private final JsonMapper jsonMapper;
 
     /**
-     * Creates the source store.
+     * 创建投影来源读取器。
      */
     public PostgresProjectionSourceStore(JdbcTemplate jdbc) {
         this(jdbc, JsonMapper.builder().build());
     }
 
     /**
-     * Creates the source store with an explicit metadata codec.
+     * 使用指定元数据编解码器创建投影来源读取器。
      */
     public PostgresProjectionSourceStore(JdbcTemplate jdbc, JsonMapper jsonMapper) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc must not be null");
@@ -93,7 +94,8 @@ public final class PostgresProjectionSourceStore implements ProjectionSourceStor
                 SELECT id, document_id, revision_id, ordinal,
                        ARRAY(SELECT jsonb_array_elements_text(element_ids_json)) AS element_ids,
                        ARRAY(SELECT jsonb_array_elements_text(section_path_json)) AS section_path,
-                       content, content_hash, metadata_json::text AS metadata_json
+                       content, contextual_text, content_hash,
+                       source_spans_json::text AS source_spans_json, metadata_json::text AS metadata_json
                 FROM knowledge_chunk
                 WHERE tenant_id = ? AND space_id = ?
                   AND document_id = ? AND revision_id = ?
@@ -106,9 +108,11 @@ public final class PostgresProjectionSourceStore implements ProjectionSourceStor
                         job.documentId(),
                         resultSet.getObject("revision_id", UUID.class),
                         uuidList(resultSet.getArray("element_ids")),
+                        sourceSpans(resultSet.getString("source_spans_json")),
                         resultSet.getInt("ordinal"),
                         stringList(resultSet.getArray("section_path")),
                         resultSet.getString("content"),
+                        resultSet.getString("contextual_text"),
                         resultSet.getString("content_hash"),
                         metadata(
                                 resultSet.getString("metadata_json"),
@@ -148,5 +152,15 @@ public final class PostgresProjectionSourceStore implements ProjectionSourceStor
 
     private static List<UUID> uuidList(Array sqlArray) throws SQLException {
         return stringList(sqlArray).stream().map(UUID::fromString).toList();
+    }
+
+    private List<ChunkSourceSpan> sourceSpans(String json) {
+        try {
+            return json == null || json.isBlank()
+                    ? List.of()
+                    : jsonMapper.readValue(json, new TypeReference<List<ChunkSourceSpan>>() { });
+        } catch (JacksonException parseFailure) {
+            throw new IllegalStateException("stored chunk source spans are invalid", parseFailure);
+        }
     }
 }

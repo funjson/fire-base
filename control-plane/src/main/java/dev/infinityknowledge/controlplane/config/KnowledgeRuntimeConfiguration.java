@@ -1,34 +1,47 @@
 package dev.infinityknowledge.controlplane.config;
 
-import dev.infinityknowledge.runtime.DefaultKnowledgeGateway;
-import dev.infinityknowledge.runtime.evidence.DefaultEvidenceBuilder;
-import dev.infinityknowledge.runtime.fusion.ReciprocalRankFusion;
-import dev.infinityknowledge.runtime.query.DefaultQueryAnalyzer;
-import dev.infinityknowledge.controlplane.application.ProjectionWorker;
+import dev.infinityknowledge.retrieval.DefaultKnowledgeGateway;
+import dev.infinityknowledge.retrieval.component.RetrievalComponentRegistry;
+import dev.infinityknowledge.retrieval.evidence.DefaultEvidenceBuilder;
+import dev.infinityknowledge.retrieval.fusion.ReciprocalRankFusion;
+import dev.infinityknowledge.retrieval.query.DefaultQueryAnalyzer;
+import dev.infinityknowledge.controlplane.application.projection.ProjectionWorker;
+import dev.infinityknowledge.controlplane.config.ingestion.ContractValidatingActiveIndexGenerationCatalog;
+import dev.infinityknowledge.controlplane.config.ingestion.IndexGenerationTrackingKnowledgeWriter;
+import dev.infinityknowledge.controlplane.config.ingestion.SpaceIndexingContractResolver;
+import dev.infinityknowledge.controlplane.config.retrieval.FeedbackPlannerProperties;
+import dev.infinityknowledge.controlplane.config.retrieval.CoverageJudgeProperties;
+import dev.infinityknowledge.controlplane.config.retrieval.SpaceRouterProperties;
 import dev.infinityknowledge.connector.obsidian.ObsidianSourceConnectorProvider;
-import dev.infinityknowledge.ingestion.HeadingAwareChunker;
-import dev.infinityknowledge.ingestion.MarkdownElementParser;
 import dev.infinityknowledge.evaluation.EvaluationStore;
 import dev.infinityknowledge.spi.KnowledgeGateway;
 import dev.infinityknowledge.spi.access.AccessPolicy;
 import dev.infinityknowledge.spi.audit.AuditStore;
 import dev.infinityknowledge.spi.connector.ConnectorStateStore;
 import dev.infinityknowledge.spi.connector.SourceConnectorProvider;
+import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
 import dev.infinityknowledge.spi.indexing.IndexProjectionStore;
+import dev.infinityknowledge.spi.indexing.IndexPhysicalContract;
+import dev.infinityknowledge.spi.indexing.ActiveIndexGenerationCatalog;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import dev.infinityknowledge.spi.indexing.ProjectionExecutor;
 import dev.infinityknowledge.spi.indexing.ProjectionJobQueue;
 import dev.infinityknowledge.spi.indexing.ProjectionSourceStore;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
 import dev.infinityknowledge.spi.retrieval.Retriever;
-import dev.infinityknowledge.spi.retrieval.Reranker;
+import dev.infinityknowledge.spi.retrieval.RetrievalSpaceCatalog;
+import dev.infinityknowledge.spi.retrieval.SpaceRouter;
+import dev.infinityknowledge.spi.retrieval.configuration.SpaceRetrievalConfigurationStore;
+import dev.infinityknowledge.spi.retrieval.observation.RetrievalObservationPublisher;
+import dev.infinityknowledge.spi.retrieval.observation.RetrievalTextFingerprinter;
+import dev.infinityknowledge.domain.retrieval.configuration.RetrievalConfigurationHardLimits;
+import dev.infinityknowledge.domain.retrieval.configuration.RetrievalConfigurationResolver;
 import dev.infinityknowledge.spi.ingestion.KnowledgeCatalog;
+import dev.infinityknowledge.spi.ingestion.SpaceDocumentProcessingConfigStore;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriter;
 import dev.infinityknowledge.spi.governance.KnowledgeGovernanceStore;
 import dev.infinityknowledge.spi.management.KnowledgeAdministrationStore;
 import dev.infinityknowledge.spi.trace.TraceSink;
-import dev.infinityknowledge.controlplane.observability.MeteredTraceSink;
-import io.micrometer.core.instrument.MeterRegistry;
 import dev.infinityknowledge.store.postgres.PostgresAccessPolicy;
 import dev.infinityknowledge.store.postgres.PostgresActiveRevisionGuard;
 import dev.infinityknowledge.store.postgres.PostgresAuditStore;
@@ -42,9 +55,11 @@ import dev.infinityknowledge.store.postgres.PostgresKnowledgeWriter;
 import dev.infinityknowledge.store.postgres.PostgresKeywordRetriever;
 import dev.infinityknowledge.store.postgres.PostgresProjectionJobQueue;
 import dev.infinityknowledge.store.postgres.PostgresProjectionSourceStore;
+import dev.infinityknowledge.store.postgres.ingestion.PostgresSpaceDocumentProcessingConfigStore;
 import dev.infinityknowledge.store.postgres.PostgresTraceSink;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -68,6 +83,22 @@ import java.util.concurrent.TimeUnit;
  */
 @Configuration
 public class KnowledgeRuntimeConfiguration {
+
+    /**
+     * 未启用外部关键词索引时沿用原向量物理代际，保持 PostgreSQL 默认部署合同不变。
+     */
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "infinity.knowledge.keyword.elasticsearch",
+            name = "enabled",
+            havingValue = "false",
+            matchIfMissing = true
+    )
+    IndexPhysicalContract baselineIndexPhysicalContract(
+            EmbeddingProperties embeddingProperties
+    ) {
+        return IndexPhysicalContract.baseline(embeddingProperties.generation());
+    }
 
     /**
      * 提供统一 UTC 时钟。
@@ -95,30 +126,6 @@ public class KnowledgeRuntimeConfiguration {
                 new ArrayBlockingQueue<>(properties.queueCapacity()),
                 Thread.ofPlatform().name("knowledge-retrieval-", 0).factory(),
                 new ThreadPoolExecutor.AbortPolicy()
-        );
-    }
-
-    /**
-     * 注册无状态 Markdown 结构解析器。
-     *
-     * @return Markdown 解析器
-     */
-    @Bean
-    MarkdownElementParser markdownElementParser() {
-        return new MarkdownElementParser();
-    }
-
-    /**
-     * 按运行配置创建标题感知切分器。
-     *
-     * @param properties 摄取配置
-     * @return 切分器
-     */
-    @Bean
-    HeadingAwareChunker headingAwareChunker(IngestionProperties properties) {
-        return new HeadingAwareChunker(
-                properties.targetChunkCharacters(),
-                properties.maximumChunkCharacters()
         );
     }
 
@@ -205,15 +212,11 @@ public class KnowledgeRuntimeConfiguration {
     @Bean
     TraceSink traceSink(
             JdbcTemplate jdbc,
-            PlatformTransactionManager transactionManager,
-            MeterRegistry meterRegistry
+            PlatformTransactionManager transactionManager
     ) {
-        return new MeteredTraceSink(
-                new PostgresTraceSink(
-                        jdbc,
-                        new TransactionTemplate(transactionManager)
-                ),
-                meterRegistry
+        return new PostgresTraceSink(
+                jdbc,
+                new TransactionTemplate(transactionManager)
         );
     }
 
@@ -242,6 +245,14 @@ public class KnowledgeRuntimeConfiguration {
             NamedParameterJdbcTemplate jdbc
     ) {
         return new PostgresKnowledgeGovernanceStore(jdbc);
+    }
+
+    /** 注册空间级 Parser 与 Chunker 配置的 PostgreSQL 端口。 */
+    @Bean
+    SpaceDocumentProcessingConfigStore spaceDocumentProcessingConfigStore(
+            NamedParameterJdbcTemplate jdbc
+    ) {
+        return new PostgresSpaceDocumentProcessingConfigStore(jdbc);
     }
 
     /**
@@ -301,18 +312,33 @@ public class KnowledgeRuntimeConfiguration {
     KnowledgeWriter knowledgeWriter(
             JdbcTemplate jdbc,
             PlatformTransactionManager transactionManager,
-            List<ProjectionExecutor> projectionExecutors
+            List<ProjectionExecutor> projectionExecutors,
+            IndexProjectionStore projectionStore,
+            EmbeddingSpec embeddingSpec,
+            IndexPhysicalContract physicalContract,
+            SpaceIndexingContractResolver indexingContractResolver,
+            Clock clock
     ) {
         Set<ProjectionType> projections = projectionExecutors.stream()
                 .map(ProjectionExecutor::projectionType)
                 .collect(java.util.stream.Collectors.toCollection(
                         () -> EnumSet.noneOf(ProjectionType.class)
                 ));
-        return new PostgresKnowledgeWriter(
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        KnowledgeWriter delegate = new PostgresKnowledgeWriter(
                 jdbc,
-                new TransactionTemplate(transactionManager),
+                transaction,
                 JsonMapper.builder().build(),
                 projections
+        );
+        return new IndexGenerationTrackingKnowledgeWriter(
+                delegate,
+                projectionStore,
+                embeddingSpec,
+                physicalContract,
+                indexingContractResolver,
+                transaction,
+                clock
         );
     }
 
@@ -368,13 +394,32 @@ public class KnowledgeRuntimeConfiguration {
      * @return projection state store
      */
     @Bean
-    IndexProjectionStore indexProjectionStore(
+    PostgresIndexProjectionStore indexProjectionStore(
             JdbcTemplate jdbc,
             PlatformTransactionManager transactionManager
     ) {
         return new PostgresIndexProjectionStore(
                 jdbc,
                 new TransactionTemplate(transactionManager)
+        );
+    }
+
+    /**
+     * 检索只读取与当前 Embedding、物理代际和 Space 处理合同一致的活动代际。
+     */
+    @Bean
+    @Primary
+    ActiveIndexGenerationCatalog activeIndexGenerationCatalog(
+            PostgresIndexProjectionStore delegate,
+            EmbeddingSpec embeddingSpec,
+            IndexPhysicalContract physicalContract,
+            SpaceIndexingContractResolver indexingContractResolver
+    ) {
+        return new ContractValidatingActiveIndexGenerationCatalog(
+                delegate,
+                embeddingSpec,
+                physicalContract,
+                indexingContractResolver
         );
     }
 
@@ -386,11 +431,24 @@ public class KnowledgeRuntimeConfiguration {
      *
      * @param accessPolicy 访问策略
      * @param activeRevisionGuard 活动修订二次校验
-     * @param retrievers 已安装 Retriever
+     * @param retrievers 已安装 Retriever，用于查询分析阶段确定可用通道
+     * @param componentRegistry 与实际执行实例绑定的强类型检索组件目录
+     * @param activeIndexGenerationCatalog Space 当前活动索引代际查询端口
+     * @param spaceCatalog 已授权活动 Space 摘要目录
+     * @param spaceRouter 可选模型 Space 排序器
+     * @param configurationStore Space 不可变检索配置存储
+     * @param configurationResolver Space 配置与请求覆盖解析器
+     * @param hardLimits 部署级不可覆盖硬上限
+     * @param observationPublisher 逐层检索事实发布端口
+     * @param textFingerprinter 查询与变体文本的密钥化指纹端口
      * @param traceSink Trace Sink
      * @param executor Retriever 执行器
      * @param clock UTC 时钟
      * @param properties 检索配置
+     * @param feedbackPlannerProperties 固定 Chain 反馈规划阶段配置
+     * @param rerankerProperties 精排阶段配置
+     * @param spaceRouterProperties Space 模型排序阶段配置
+     * @param coverageJudgeProperties Coverage 判断阶段配置
      * @return Knowledge Gateway
      */
     @Bean
@@ -398,11 +456,23 @@ public class KnowledgeRuntimeConfiguration {
             AccessPolicy accessPolicy,
             ActiveRevisionGuard activeRevisionGuard,
             List<Retriever> retrievers,
-            Optional<Reranker> reranker,
+            RetrievalComponentRegistry componentRegistry,
+            ActiveIndexGenerationCatalog activeIndexGenerationCatalog,
+            RetrievalSpaceCatalog spaceCatalog,
+            Optional<SpaceRouter> spaceRouter,
+            SpaceRetrievalConfigurationStore configurationStore,
+            RetrievalConfigurationResolver configurationResolver,
+            RetrievalConfigurationHardLimits hardLimits,
+            RetrievalObservationPublisher observationPublisher,
+            RetrievalTextFingerprinter textFingerprinter,
             TraceSink traceSink,
             @Qualifier("retrievalExecutor") ExecutorService executor,
             Clock clock,
-            RetrievalProperties properties
+            RetrievalProperties properties,
+            FeedbackPlannerProperties feedbackPlannerProperties,
+            RerankerProperties rerankerProperties,
+            SpaceRouterProperties spaceRouterProperties,
+            CoverageJudgeProperties coverageJudgeProperties
     ) {
         return new DefaultKnowledgeGateway(
                 accessPolicy,
@@ -413,16 +483,27 @@ public class KnowledgeRuntimeConfiguration {
                                 .map(Retriever::channel)
                                 .collect(java.util.stream.Collectors.toUnmodifiableSet())
                 ),
-                retrievers,
+                componentRegistry,
+                activeIndexGenerationCatalog,
                 new ReciprocalRankFusion(properties.rrfConstant()),
-                reranker.orElseGet(Reranker::passthrough),
                 new DefaultEvidenceBuilder(),
                 traceSink,
+                spaceCatalog,
+                spaceRouter.orElseGet(SpaceRouter::deterministic),
+                configurationStore,
+                configurationResolver,
+                hardLimits,
+                observationPublisher,
+                textFingerprinter,
                 executor,
                 clock,
                 properties.sufficientThreshold(),
                 properties.requestTimeout(),
-                properties.channelTimeout()
+                spaceRouterProperties.stageTimeout(),
+                feedbackPlannerProperties.stageTimeout(),
+                properties.channelTimeout(),
+                rerankerProperties.stageTimeout(),
+                coverageJudgeProperties.stageTimeout()
         );
     }
 }

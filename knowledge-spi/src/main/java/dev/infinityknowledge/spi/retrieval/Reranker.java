@@ -3,6 +3,7 @@ package dev.infinityknowledge.spi.retrieval;
 import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -17,9 +18,9 @@ public interface Reranker {
      * @param query 查询文本
      * @param candidates 已授权候选
      * @param limit 返回上限
-     * @return 重排后的候选
+     * @return 重排顺序、本次查询内的模型分数和稳定原因码
      */
-    List<RetrievalCandidate> rerank(
+    RerankResult rerank(
             String query,
             List<RetrievalCandidate> candidates,
             int limit
@@ -37,7 +38,12 @@ public interface Reranker {
             if (limit < 1) {
                 throw new IllegalArgumentException("limit must be positive");
             }
-            return candidates.stream().limit(limit).toList();
+            return new RerankResult(
+                    candidates.stream().limit(limit).toList(),
+                    Map.of(),
+                    0,
+                    "PASSTHROUGH"
+            );
         };
     }
 }

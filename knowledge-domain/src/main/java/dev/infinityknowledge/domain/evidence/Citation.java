@@ -2,6 +2,7 @@ package dev.infinityknowledge.domain.evidence;
 
 import dev.infinityknowledge.domain.common.DomainChecks;
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 
 import java.util.List;
 import java.util.Objects;
@@ -16,6 +17,7 @@ import java.util.UUID;
  * @param title 文档标题
  * @param sectionPath 章节路径
  * @param sourceUri 原始来源 URI
+ * @param sourceSpans 可选的元素内范围，用于原文高亮
  */
 public record Citation(
         DocumentId documentId,
@@ -23,7 +25,8 @@ public record Citation(
         UUID chunkId,
         String title,
         List<String> sectionPath,
-        String sourceUri
+        String sourceUri,
+        List<ChunkSourceSpan> sourceSpans
 ) {
 
     /**
@@ -38,6 +41,17 @@ public record Citation(
                 Objects.requireNonNull(sectionPath, "sectionPath must not be null")
         );
         sourceUri = DomainChecks.requiredText(sourceUri, "sourceUri", 2048);
+        sourceSpans = List.copyOf(Objects.requireNonNull(
+                sourceSpans,
+                "sourceSpans must not be null"
+        ));
+    }
+
+    /** 兼容历史调用方；缺少范围时调用方只能按 Chunk 展示。 */
+    public Citation(
+            DocumentId documentId, UUID revisionId, UUID chunkId, String title,
+            List<String> sectionPath, String sourceUri
+    ) {
+        this(documentId, revisionId, chunkId, title, sectionPath, sourceUri, List.of());
     }
 }
-

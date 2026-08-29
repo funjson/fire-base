@@ -15,6 +15,7 @@ security:
 tags:
   - name: Spaces
   - name: Documents
+  - name: Extraction
   - name: Projections
   - name: Query
   - name: Connectors
@@ -25,12 +26,39 @@ tags:
   - name: Graph
   - name: Wiki
 paths:
+  /api/v1/document-processing-capabilities:
+    get:
+      tags: [Spaces]
+      operationId: getDocumentProcessingCapabilities
+      summary: Get safe document-processing defaults and installed capabilities
+      description: |
+        Requires `knowledge-admin`. This endpoint does not depend on an existing Space and
+        is used by the Space creation form. It returns stable IDs, availability and safe
+        defaults, but never model endpoints, credentials or deployment secrets.
+      responses:
+        '200':
+          description: Safe defaults and installed Parser, Chunker, Tokenizer and Embedding capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentProcessingCapabilities'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/spaces:
     post:
       tags: [Spaces]
       operationId: createSpace
-      summary: Idempotently create a tenant knowledge space
-      description: Requires `knowledge-admin`; the creator receives an administrator ACL grant.
+      summary: Create a tenant knowledge space with immutable processing configuration
+      description: |
+        Requires `knowledge-admin`. For a new ID, the server validates the complete
+        document-processing configuration and atomically commits the Space, immutable
+        configuration, creator administrator ACL and API upload Connector. The required
+        description explains the Space purpose to users and participates in Space Router
+        matching. An exact repeated request is idempotent and does not overwrite the stored
+        definition; a reused ID with a different name, description, configuration or
+        non-ACTIVE state is rejected.
       requestBody:
         required: true
         content:
@@ -46,6 +74,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/KnowledgeSpaceConflict'
   /api/v1/spaces/accessible:
     get:
       tags: [Spaces]
@@ -123,6 +153,123 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/{spaceId}/document-processing-config:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    get:
+      tags: [Spaces]
+      operationId: getSpaceDocumentProcessingConfig
+      summary: Get the document processing configuration for a space
+      description: |
+        Requires `knowledge-admin`. The returned configuration was stored when the
+        Space was created and is immutable. Changing formal processing semantics requires
+        a new Space; TEST_ONLY runs may supply a complete per-run testConfig without
+        changing it. A valid testConfig can run even if an unused fixed Space adapter was
+        later disabled; this is an explicit test override, never a formal fallback.
+      responses:
+        '200':
+          description: Immutable Space configuration, creation audit and installed capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceDocumentProcessingConfig'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/{spaceId}/retrieval-configuration:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    get:
+      tags: [Spaces, Query]
+      operationId: getSpaceRetrievalConfiguration
+      summary: Get the current immutable retrieval configuration revision
+      description: |
+        Requires read access to the Space. The response identifies the complete materialized
+        retrieval configuration, immutable revision and semantic fingerprint actually used as
+        the base for request overrides.
+      responses:
+        '200':
+          description: Current Space retrieval configuration revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceRetrievalConfiguration'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SpaceRetrievalConfigurationNotFound'
+    put:
+      tags: [Spaces, Query]
+      operationId: updateSpaceRetrievalConfiguration
+      summary: Append and atomically select a complete retrieval configuration revision
+      description: |
+        Requires `knowledge-admin`. The request uses optimistic revision matching. Identical
+        retries are idempotent; a stale revision with different content is rejected rather than
+        overwriting another update. Index-generation and embedding-shape settings are outside
+        this mutable configuration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSpaceRetrievalConfigurationRequest'
+      responses:
+        '200':
+          description: Current revision after the idempotent append/select operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceRetrievalConfiguration'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SpaceRetrievalConfigurationNotFound'
+        '409':
+          $ref: '#/components/responses/SpaceRetrievalConfigurationConflict'
+  /api/v1/spaces/{spaceId}/retrieval-configuration/history:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    get:
+      tags: [Spaces, Query]
+      operationId: listSpaceRetrievalConfigurationHistory
+      summary: List immutable retrieval configuration revisions newest first
+      description: Requires read access to the Space.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: Bounded immutable revision history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpaceRetrievalConfiguration'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SpaceRetrievalConfigurationNotFound'
   /api/v1/spaces/{spaceId}/projections/rebuild:
     parameters:
       - $ref: '#/components/parameters/SpaceId'
@@ -144,6 +291,298 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/{spaceId}/extraction-runs:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    post:
+      tags: [Extraction]
+      operationId: createExtractionRun
+      summary: Upload multiple sources and create a TEST_ONLY extraction run
+      description: |
+        Requires `knowledge-admin`. Each source is bounded, hashed and retained in
+        object storage independently. The run executes Parse, Clean and Chunk only;
+        it never writes Document, Revision or Projection records. The immutable
+        effective configuration is captured before the sources are accepted. An
+        optional full test configuration applies only to this TEST_ONLY run:
+        the server canonicalizes it, validates installed Parser/Chunker/Tokenizer
+        capabilities and captures the canonical snapshot without updating the
+        immutable Space configuration.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items:
+                    type: string
+                    format: binary
+                language:
+                  type: string
+                  default: zh-CN
+                  maxLength: 32
+                datasetId:
+                  type: string
+                  description: Optional governed Dataset id. A real Gate remains NOT_EVALUATED until all cases can be observed.
+                baselineRunId:
+                  type: string
+                  format: uuid
+                  description: |
+                    Optional comparable Baseline: a TEST_ONLY SUCCEEDED run in the
+                    same tenant, space, immutable Dataset and normalized language,
+                    whose Gate is PASSED or FAILED.
+                testConfig:
+                  $ref: '#/components/schemas/DocumentProcessingConfiguration'
+            encoding:
+              testConfig:
+                contentType: application/json
+      responses:
+        '202':
+          description: Sources retained and extraction run queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionRunDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ExtractionRunActive'
+        '413':
+          $ref: '#/components/responses/SourceTooLarge'
+    get:
+      tags: [Extraction]
+      operationId: listExtractionRuns
+      summary: List recent extraction runs for one space
+      description: Requires `knowledge-admin`; the server applies a bounded list limit.
+      responses:
+        '200':
+          description: Recent run summaries ordered by creation time descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExtractionRunSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/{spaceId}/ingestion-runs:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    post:
+      tags: [Extraction]
+      operationId: createIngestionRun
+      summary: Retain multiple sources and create an asynchronous INGEST run
+      description: |
+        Requires `knowledge-admin`. Files are paired with manifest items by array
+        order. The server captures the Space processing configuration once, retains
+        every original source, and asynchronously performs Parse, Clean, Chunk and
+        transactional publication. An identical active source is skipped; the same
+        externalId with different content fails instead of overwriting it. Parser or
+        Chunker upload-time overrides are not accepted.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files, manifest]
+              properties:
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items:
+                    type: string
+                    format: binary
+                manifest:
+                  $ref: '#/components/schemas/IngestionManifest'
+                language:
+                  type: string
+                  default: zh-CN
+                  maxLength: 32
+            encoding:
+              manifest:
+                contentType: application/json
+      responses:
+        '202':
+          description: Sources retained and formal ingestion run queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionRunDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ExtractionRunActive'
+        '413':
+          $ref: '#/components/responses/SourceTooLarge'
+  /api/v1/spaces/{spaceId}/extraction-runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+      - name: runId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Extraction]
+      operationId: getExtractionRun
+      summary: Get one run and its per-file diagnostics
+      responses:
+        '200':
+          description: Extraction run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionRunDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ExtractionRunNotFound'
+  /api/v1/spaces/{spaceId}/extraction-datasets:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+    get:
+      tags: [Extraction]
+      operationId: listExtractionDatasets
+      summary: List governed extraction datasets without source content
+      description: Requires `knowledge-admin`; descriptors expose provenance metadata but never Golden Source text.
+      responses:
+        '200':
+          description: Available server-side extraction datasets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExtractionDataset'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/spaces/{spaceId}/extraction-datasets/{datasetId}/runs:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+      - name: datasetId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Extraction]
+      operationId: createExtractionDatasetRun
+      summary: Run server-side Golden Sources through the real extraction pipeline
+      description: |
+        Requires `knowledge-admin`. Golden Sources use the same OSS, Parse, Clean and
+        Chunk task path as uploads. Run SUCCEEDED and Gate PASSED are independent results.
+        An optional full test configuration is canonicalized, capability-checked
+        and captured for this TEST_ONLY run only; it never updates the Space active
+        configuration. A Baseline must use the same immutable Dataset and normalized
+        language, and must already be TEST_ONLY, SUCCEEDED with Gate PASSED or FAILED.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractionDatasetRunRequest'
+      responses:
+        '202':
+          description: Dataset sources retained and TEST_ONLY run queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionRunDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/ExtractionRunActive'
+  /api/v1/spaces/{spaceId}/extraction-runs/{runId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+      - name: runId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Extraction]
+      operationId: cancelExtractionRun
+      summary: Request cooperative cancellation
+      description: |
+        Queued runs cancel immediately; running runs stop at a safe file boundary.
+        An INGEST item already in PUBLISHING rejects cancellation with a stable 409.
+      responses:
+        '202':
+          description: Latest run state after accepting the cancellation request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionRunDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ExtractionRunNotFound'
+        '409':
+          $ref: '#/components/responses/ExtractionPublicationInProgress'
+  /api/v1/spaces/{spaceId}/extraction-runs/{runId}/items/{itemId}/source:
+    parameters:
+      - $ref: '#/components/parameters/SpaceId'
+      - name: runId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Extraction]
+      operationId: downloadExtractionSource
+      summary: Download the authorized original source for one run item
+      description: Requires `knowledge-admin`; physical object-storage keys are never returned.
+      responses:
+        '200':
+          description: Original source using its registered media type, as an attachment with no-store and nosniff headers
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ExtractionRunNotFound'
   /api/v1/documents/markdown:
     post:
       tags: [Documents]
@@ -169,33 +608,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-  /api/v1/documents/files:
-    post:
-      tags: [Documents]
-      operationId: ingestFile
-      summary: Retain, parse and ingest a supported source file
-      description: Requires `knowledge-admin`.
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              $ref: '#/components/schemas/FileDocumentRequest'
-      responses:
-        '200':
-          description: Active revision and retained source metadata
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FileDocumentResponse'
-        '400':
-          $ref: '#/components/responses/InvalidRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '413':
-          $ref: '#/components/responses/SourceTooLarge'
   /api/v1/documents/{documentId}/source:
     parameters:
       - $ref: '#/components/parameters/DocumentId'
@@ -351,6 +763,12 @@ paths:
       tags: [Query]
       operationId: queryKnowledge
       summary: Retrieve an ACL-filtered evidence bundle
+      description: |
+        The runtime is stateless and expects a standalone query. The original query always
+        remains in retrieval. The request may apply a typed, bounded override to the first
+        visited Space configuration; it cannot override tenant, Space authorization or
+        deployment hard limits. `testMode` isolates observation metrics by purpose without
+        bypassing the real retrieval path.
       requestBody:
         required: true
         content:
@@ -370,6 +788,33 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/retrieval-observations/requests/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      tags: [Query, Evaluations]
+      operationId: getRetrievalObservationByRequest
+      summary: Get the latest safe retrieval execution report for a request
+      description: |
+        Reads only inside the JWT tenant and requires the current principal to retain access
+        to every Space involved in the report. The response excludes raw event payloads,
+        query text, candidate or Chunk content and model raw responses. A short 404 retry can
+        be used after query completion while an alternative asynchronous event transport is in use.
+      responses:
+        '200':
+          description: Ordered stage facts, configuration identities and versioned metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalObservationReport'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/RetrievalObservationNotFound'
   /api/v1/connectors/obsidian:
     post:
       tags: [Connectors]
@@ -478,7 +923,9 @@ paths:
       tags: [Management]
       operationId: listAdminDocuments
       summary: Page tenant documents for administration
-      description: Requires `knowledge-admin`; deleted documents are omitted.
+      description: |
+        Requires `knowledge-admin`. Deleted documents are omitted unless `status=DELETED`
+        is explicitly requested. Optional filters are combined with AND semantics.
       parameters:
         - name: spaceId
           in: query
@@ -486,18 +933,68 @@ paths:
             type: string
         - name: status
           in: query
+          description: Document lifecycle status; omit it to exclude deleted documents.
+          schema:
+            $ref: '#/components/schemas/DocumentStatus'
+        - name: title
+          in: query
+          description: Case-insensitive substring of the document title.
           schema:
             type: string
+        - name: source
+          in: query
+          description: Case-insensitive substring of source type, source URI or original file name.
+          schema:
+            type: string
+        - name: keywordStatus
+          in: query
+          description: Keyword projection status for the active revision.
+          schema:
+            type: string
+            enum: [PENDING, SUCCEEDED, FAILED, SKIPPED]
+        - name: vectorStatus
+          in: query
+          description: Vector projection status for the active revision.
+          schema:
+            type: string
+            enum: [PENDING, SUCCEEDED, FAILED, SKIPPED]
+        - name: minimumChunkCount
+          in: query
+          description: Inclusive minimum Chunk count for the active revision.
+          schema:
+            type: integer
+            minimum: 0
+        - name: maximumChunkCount
+          in: query
+          description: Inclusive maximum Chunk count for the active revision.
+          schema:
+            type: integer
+            minimum: 0
+        - name: updatedFrom
+          in: query
+          description: Inclusive lower bound for the document update time.
+          schema:
+            type: string
+            format: date-time
+        - name: updatedTo
+          in: query
+          description: Inclusive upper bound for the document update time.
+          schema:
+            type: string
+            format: date-time
         - name: limit
           in: query
           schema:
             type: integer
             default: 50
+            minimum: 1
+            maximum: 200
         - name: offset
           in: query
           schema:
             type: integer
             default: 0
+            minimum: 0
       responses:
         '200':
           description: Document page
@@ -509,6 +1006,29 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /api/v1/admin/documents/{documentId}:
+    parameters:
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Management]
+      operationId: getAdminDocument
+      summary: Get one tenant document summary for the administration detail page
+      description: Requires `knowledge-admin`; tenant isolation is always enforced.
+      responses:
+        '200':
+          description: Document summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagementDocument'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/DocumentNotFound'
   /api/v1/admin/documents/{documentId}/chunks:
     parameters:
       - $ref: '#/components/parameters/DocumentId'
@@ -1107,6 +1627,13 @@ components:
       schema:
         type: string
         format: uuid
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     PageId:
       name: pageId
       in: path
@@ -1154,6 +1681,32 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    KnowledgeSpaceConflict:
+      description: |
+        The Space ID already exists but its name, immutable processing configuration
+        or lifecycle state differs from the creation request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    SpaceRetrievalConfigurationNotFound:
+      description: The requested authorized Space has no retrieval configuration
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    SpaceRetrievalConfigurationConflict:
+      description: The expected retrieval configuration revision is stale or conflicts
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    RetrievalObservationNotFound:
+      description: No retrieval observation exists for this request inside the JWT tenant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
     WorkQueueSaturated:
       description: The bounded asynchronous work queue cannot accept more work
       content:
@@ -1168,6 +1721,24 @@ components:
             $ref: '#/components/schemas/ApiError'
     SourceTooLarge:
       description: Uploaded source exceeds the configured limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ExtractionRunActive:
+      description: The space already has a QUEUED, RUNNING or CANCEL_REQUESTED run
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ExtractionPublicationInProgress:
+      description: An INGEST item is inside the non-cancellable publication transaction window
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ExtractionRunNotFound:
+      description: The requested run or item does not exist in the authorized space
       content:
         application/json:
           schema:
@@ -1200,7 +1771,7 @@ components:
           format: date-time
     CreateSpaceRequest:
       type: object
-      required: [spaceId, name]
+      required: [spaceId, name, description, documentProcessingConfig]
       properties:
         spaceId:
           type: string
@@ -1210,6 +1781,13 @@ components:
           type: string
           minLength: 1
           maxLength: 256
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Space purpose shown to users and used as input for Space Router matching.
+        documentProcessingConfig:
+          $ref: '#/components/schemas/DocumentProcessingConfiguration'
     AccessibleSpace:
       type: object
       required: [id, name, description, status, version, documentCount, updatedAt]
@@ -1250,6 +1828,391 @@ components:
     SpaceGrant:
       allOf:
         - $ref: '#/components/schemas/SpaceAclRequest'
+    DocumentProcessingConfiguration:
+      type: object
+      description: |
+        A complete, versionless processing configuration shared by Space creation and
+        per-run TEST_ONLY overrides. It is not a separately promoted resource.
+      required: [parserSelections, cleaning, chunker]
+      properties:
+        parserSelections:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/SpaceParserSelection'
+        cleaning:
+          $ref: '#/components/schemas/DocumentCleaningConfiguration'
+        chunker:
+          $ref: '#/components/schemas/SpaceChunkerConfiguration'
+    DocumentProcessingContract:
+      type: object
+      description: Space 创建时固化的实际处理实现合同；仅用于审计和检测部署实现漂移。
+      required:
+        - pipelineContract
+        - normalizerSchemaContract
+        - parserContracts
+        - cleanerContract
+        - chunkerContract
+        - fingerprint
+      properties:
+        pipelineContract:
+          type: string
+          minLength: 1
+        normalizerSchemaContract:
+          type: string
+          minLength: 1
+        parserContracts:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+            minLength: 1
+        cleanerContract:
+          type: string
+          minLength: 1
+        chunkerContract:
+          type: string
+          minLength: 1
+          description: 包含 Chunker Provider、Tokenizer、模型预算与实现版本材料。
+        fingerprint:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    DocumentProcessingCapabilities:
+      type: object
+      description: |
+        Space 创建表单使用的安全默认配置和部署能力目录；不包含模型 Endpoint、凭据
+        或其他部署秘密。提交创建请求时服务端仍会重新校验全部能力。该默认配置覆盖
+        创建当时全部规范格式；已有 Space 的固化映射不会因后来安装 Adapter 而被补齐。
+      required:
+        - defaultConfig
+        - availableParsers
+        - availableChunkers
+        - availableTokenizers
+        - availableEmbeddingProfiles
+      properties:
+        defaultConfig:
+          $ref: '#/components/schemas/DocumentProcessingConfiguration'
+        availableParsers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableParser'
+        availableChunkers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableChunker'
+        availableTokenizers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableTokenizer'
+        availableEmbeddingProfiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableEmbeddingProfile'
+    SpaceDocumentProcessingConfig:
+      type: object
+      required:
+        - spaceId
+        - version
+        - updatedAt
+        - updatedBy
+        - processingContract
+        - runtimeContractMatched
+        - parserSelections
+        - cleaning
+        - chunker
+        - availableParsers
+        - availableChunkers
+        - availableTokenizers
+        - availableEmbeddingProfiles
+      properties:
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        version:
+          type: integer
+          format: int64
+          enum: [1]
+          description: Fixed at creation; this is not an editable configuration revision.
+        updatedAt:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+          minLength: 1
+          maxLength: 128
+        processingContract:
+          $ref: '#/components/schemas/DocumentProcessingContract'
+        runtimeContractMatched:
+          type: boolean
+          description: |
+            当前部署实现是否与 Space 创建时固化合同完全一致；false 时禁止使用 Space 固化配置
+            继续正式摄取。完整且当前可执行的 TEST_ONLY 本次测试配置仍可独立运行。
+        parserSelections:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/SpaceParserSelection'
+        cleaning:
+          $ref: '#/components/schemas/DocumentCleaningConfiguration'
+        chunker:
+          $ref: '#/components/schemas/SpaceChunkerConfiguration'
+        availableParsers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableParser'
+        availableChunkers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableChunker'
+        availableTokenizers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableTokenizer'
+        availableEmbeddingProfiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableEmbeddingProfile'
+    SpaceParserSelection:
+      type: object
+      required: [mediaType, parserId]
+      properties:
+        mediaType:
+          type: string
+          minLength: 1
+          maxLength: 128
+        parserId:
+          type: string
+          minLength: 1
+          maxLength: 128
+    DocumentCleaningConfiguration:
+      type: object
+      description: |
+        Processing action for roles explicitly identified by the selected Parser.
+        Hidden content remains a non-configurable server-side safety exclusion.
+      required: [header, footer, pageNumber, watermark, frontMatter]
+      properties:
+        header:
+          $ref: '#/components/schemas/DocumentCleaningAction'
+        footer:
+          $ref: '#/components/schemas/DocumentCleaningAction'
+        pageNumber:
+          $ref: '#/components/schemas/DocumentCleaningAction'
+        watermark:
+          $ref: '#/components/schemas/DocumentCleaningAction'
+        frontMatter:
+          $ref: '#/components/schemas/DocumentCleaningAction'
+    DocumentCleaningAction:
+      type: string
+      enum: [KEEP, REMOVE, METADATA_ONLY]
+      description: Keep as searchable content, remove, or retain only as governance metadata.
+    SpaceChunkerConfiguration:
+      type: object
+      description: |
+        Space selection, common Token budget and provider-specific canonical
+        configuration. Built-ins are STRUCTURAL and SEMANTIC_REFINEMENT. Provider IDs
+        and Token Counter IDs must be selected from the returned capability directories.
+      required:
+        - providerId
+        - tokenizerId
+        - minimumTokens
+        - targetTokens
+        - maximumTokens
+        - overlapTokens
+        - providerConfig
+      properties:
+        providerId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Z][A-Z0-9_]{0,63}$'
+          description: Stable installed Chunker Provider ID; not a closed enum.
+        tokenizerId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          description: Stable installed Token Counter ID.
+        minimumTokens:
+          type: integer
+          minimum: 1
+          maximum: 65536
+        targetTokens:
+          type: integer
+          minimum: 1
+          maximum: 65536
+          description: Must be greater than or equal to minimumTokens.
+        maximumTokens:
+          type: integer
+          minimum: 1
+          maximum: 65536
+          description: Must be greater than or equal to targetTokens.
+        overlapTokens:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: Must be strictly less than minimumTokens.
+        providerConfig:
+          $ref: '#/components/schemas/ChunkerProviderConfiguration'
+    ChunkerProviderConfiguration:
+      type: object
+      maxProperties: 16
+      description: |
+        Provider-specific scalar configuration. STRUCTURAL requires `{}`.
+        SEMANTIC_REFINEMENT requires exactly contextSlices, embeddingProfileId,
+        mergeSimilarityThreshold and splitSimilarityThreshold. contextSlices is 0..2;
+        thresholds satisfy -1 <= split < merge <= 1. Other installed adapters define
+        their own server-side validated contract.
+      additionalProperties:
+        oneOf:
+          - type: string
+          - type: number
+          - type: boolean
+    AvailableParser:
+      type: object
+      description: Parser capability catalog entry; unavailable entries are visible but not selectable.
+      required:
+        - id
+        - version
+        - canonicalMediaType
+        - defaultSelection
+        - available
+        - unavailableReason
+        - mediaTypes
+        - extensions
+        - outputCapabilities
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        canonicalMediaType:
+          type: string
+        defaultSelection:
+          type: boolean
+          description: Whether this available Parser is the deployment default for its format.
+        available:
+          type: boolean
+          description: Whether the current deployment can save and execute this Parser.
+        unavailableReason:
+          type: string
+          nullable: true
+          description: Stable reason code when the catalog entry is not installed or enabled.
+        mediaTypes:
+          type: array
+          items:
+            type: string
+        extensions:
+          type: array
+          items:
+            type: string
+        outputCapabilities:
+          type: array
+          uniqueItems: true
+          description: Guaranteed output structure and provenance capabilities; not a quality score.
+          items:
+            $ref: '#/components/schemas/ParserOutputCapability'
+    ParserOutputCapability:
+      type: string
+      enum:
+        - STANDARD_ELEMENTS
+        - HIERARCHY
+        - PAGE_NUMBER
+        - BOUNDING_BOX
+        - FLAT_TABLE_TEXT
+        - TABLE_STRUCTURE
+        - NATIVE_ARTIFACT
+    AvailableChunker:
+      type: object
+      description: |
+        Installed Chunker Provider descriptor. Registry and selection are Adapter-ready,
+        but the current distribution contains no third-party implementation.
+        SEMANTIC_REFINEMENT adds or removes only STRUCTURAL soft boundaries and cannot
+        cross structural hard boundaries; it is not a pure-semantic mode.
+      required:
+        - id
+        - version
+        - available
+        - unavailableReason
+        - requiredParserCapabilities
+        - defaultProviderConfig
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Z][A-Z0-9_]{0,63}$'
+          description: Stable Provider ID; not a closed enum.
+        version:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Provider implementation contract version.
+        available:
+          type: boolean
+          description: Whether the current deployment can execute this Provider.
+        unavailableReason:
+          type: string
+          nullable: true
+          maxLength: 128
+          pattern: '^[A-Z][A-Z0-9_]{0,127}$'
+          description: Stable reason code when unavailable; otherwise null.
+        requiredParserCapabilities:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          description: |
+            Capabilities every effective selected Parser must provide. The server
+            rejects incompatible Parser/Chunker combinations during configuration.
+          items:
+            $ref: '#/components/schemas/ParserOutputCapability'
+        defaultProviderConfig:
+          $ref: '#/components/schemas/ChunkerProviderConfiguration'
+    AvailableTokenizer:
+      type: object
+      required: [id, version, description, exactModelTokens, modelProfileId,
+                 available, unavailableReason]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        version:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description:
+          type: string
+        exactModelTokens:
+          type: boolean
+          description: |
+            True only when the counter implements the exact target-model tokenizer.
+            UTF8_BYTE_BUDGET is a deterministic UTF-8 byte budget proxy and returns false.
+        modelProfileId:
+          type: string
+          nullable: true
+          description: Deployment-pinned target model contract; not a credential.
+        available:
+          type: boolean
+          description: Whether this deployment can execute the Tokenizer now.
+        unavailableReason:
+          type: string
+          nullable: true
+          description: Stable reason code when the Adapter exists but is not configured.
+    AvailableEmbeddingProfile:
+      type: object
+      required: [id, description]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Deployment-installed model/version/dimension contract; not credentials.
+        description:
+          type: string
     MarkdownDocumentRequest:
       type: object
       required: [spaceId, externalId, title, sourceUri, language, content]
@@ -1312,63 +2275,622 @@ components:
           type: array
           items:
             type: string
-    FileDocumentRequest:
+    IngestionManifest:
       type: object
-      required: [file, spaceId, externalId]
+      required: [items]
       properties:
-        file:
-          type: string
-          format: binary
-        spaceId:
-          type: string
-          minLength: 1
-          maxLength: 64
+        items:
+          type: array
+          minItems: 1
+          maxItems: 10
+          description: Must have the same size and order as the multipart files array.
+          items:
+            $ref: '#/components/schemas/IngestionManifestItem'
+    IngestionManifestItem:
+      type: object
+      required: [externalId]
+      properties:
         externalId:
           type: string
           minLength: 1
           maxLength: 512
+          description: Stable logical source key. It never implies overwrite.
         title:
           type: string
           maxLength: 512
-        language:
-          type: string
-          minLength: 1
-          maxLength: 32
-          default: zh-CN
+          description: Human-readable retrieval title; a blank value uses the safe file name.
         authority:
           type: integer
           minimum: 0
           maximum: 100
           default: 80
-    FileDocumentResponse:
+          description: Source quality signal, not an authorization role or ACL.
+    ExtractionRunStatus:
+      type: string
+      enum: [QUEUED, RUNNING, CANCEL_REQUESTED, SUCCEEDED, FAILED, CANCELLED]
+    ExtractionItemStatus:
+      type: string
+      enum: [QUEUED, RUNNING, SUCCEEDED, SKIPPED_DUPLICATE, FAILED, CANCELLED]
+    ExtractionItemStage:
+      type: string
+      description: 粗粒度阶段归因；当前 RUNNING/PARSE 表示已开始抽取，不是逐阶段实时进度。
+      enum: [STORED, PARSE, CLEAN, CHUNK, PUBLISHING, COMPLETED]
+    ExtractionGateStatus:
+      type: string
+      description: Gate 与 Run 状态彼此独立；未执行真实 Dataset 评测时必须是 NOT_EVALUATED。
+      enum: [NOT_EVALUATED, PASSED, FAILED, ERROR]
+    ExtractionRunSummary:
       type: object
-      required: [documentId, revisionId, changed, elementCount, chunkCount, originalFileName, mediaType, contentLength, vectorStatus, warnings]
+      required: [id, spaceId, mode, status, errorCode, configVersion,
+                 configFingerprint, datasetId, baselineRunId, gateStatus,
+                 totalItems, succeededItems, skippedDuplicateItems, failedItems,
+                 createdAt, startedAt, finishedAt, heartbeatAt]
       properties:
-        documentId:
+        id:
           type: string
           format: uuid
-        revisionId:
+        spaceId:
+          type: string
+        mode:
+          type: string
+          description: TEST_ONLY 不发布正式数据；INGEST 使用相同任务模型并可输出 Document/Revision。
+          enum: [TEST_ONLY, INGEST]
+        status:
+          $ref: '#/components/schemas/ExtractionRunStatus'
+        errorCode:
+          type: string
+          nullable: true
+        configVersion:
+          type: integer
+          format: int64
+          description: |
+            Space 创建时固化的配置版本，仅用于审计和 INGEST 防御性写栅栏，不参与
+            有效配置指纹；TEST_ONLY 使用本次测试配置时仍记录 Space 的固化版本。
+        configFingerprint:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: 仅由规范化有效配置与处理合同计算。
+        datasetId:
+          type: string
+          nullable: true
+        baselineRunId:
           type: string
           format: uuid
-        changed:
-          type: boolean
-        elementCount:
+          nullable: true
+          description: |
+            创建本次测试 Run 时已经是 TEST_ONLY、SUCCEEDED 且 Gate 为 PASSED 或 FAILED
+            的可评测 Run；必须属于同 tenant/space、同不可变 Dataset 与相同规范化语言。
+        gateStatus:
+          $ref: '#/components/schemas/ExtractionGateStatus'
+        totalItems:
           type: integer
-        chunkCount:
+        succeededItems:
           type: integer
-        originalFileName:
+          format: int64
+        skippedDuplicateItems:
+          type: integer
+          format: int64
+          description: INGEST 无覆盖语义下按相同内容短路的成功类终态数量。
+        failedItems:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        heartbeatAt:
+          type: string
+          format: date-time
+          nullable: true
+    ExtractionRunDetail:
+      allOf:
+        - $ref: '#/components/schemas/ExtractionRunSummary'
+        - type: object
+          required: [configSnapshot, gateReport, items]
+          properties:
+            configSnapshot:
+              $ref: '#/components/schemas/ExtractionConfigSnapshot'
+            gateReport:
+              nullable: true
+              allOf:
+                - $ref: '#/components/schemas/ExtractionGateReport'
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ExtractionRunItem'
+    ExtractionRunItem:
+      type: object
+      required: [id, sourceAssetId, fileName, mediaType, contentLength,
+                 checksumSha256, externalId, title, authority, status, stage,
+                 errorCode, diagnostics, preview, documentId, revisionId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceAssetId:
+          type: string
+          format: uuid
+        fileName:
           type: string
         mediaType:
           type: string
         contentLength:
           type: integer
           format: int64
-        vectorStatus:
+        checksumSha256:
           type: string
-        warnings:
+          pattern: '^[0-9a-f]{64}$'
+        externalId:
+          type: string
+          nullable: true
+          description: INGEST 创建时固化的稳定来源标识；TEST_ONLY 为 null。
+        title:
+          type: string
+          nullable: true
+          description: INGEST 创建时固化并参与检索的标题；TEST_ONLY 为 null。
+        authority:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          description: INGEST 创建时固化的来源质量信号，不是 ACL；TEST_ONLY 为 null。
+        status:
+          $ref: '#/components/schemas/ExtractionItemStatus'
+        stage:
+          $ref: '#/components/schemas/ExtractionItemStage'
+        errorCode:
+          type: string
+          nullable: true
+        diagnostics:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ExtractionItemDiagnostics'
+        preview:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ExtractionPreview'
+        documentId:
+          type: string
+          format: uuid
+          nullable: true
+          description: INGEST 成功发布或重复短路时的正式 Document；TEST_ONLY 必须为 null。
+        revisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: 与 documentId 成对出现；TEST_ONLY 必须为 null。
+    ExtractionConfigSnapshot:
+      type: object
+      description: 创建任务时固化的完整有效处理配置，可无损恢复执行配置。
+      required: [processingContract, normalizerContract, parserSelections, cleaning,
+                 chunker, fingerprint]
+      properties:
+        processingContract:
+          $ref: '#/components/schemas/DocumentProcessingContract'
+        normalizerContract:
+          type: string
+          minLength: 1
+          description: 本次输入字节规范化实现；多文件为 identity-bytes-v1。
+        parserSelections:
+          type: object
+          additionalProperties:
+            type: string
+        cleaning:
+          $ref: '#/components/schemas/ExtractionConfigCleaning'
+        chunker:
+          $ref: '#/components/schemas/ExtractionConfigChunker'
+        fingerprint:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    ExtractionConfigCleaning:
+      type: object
+      required: [header, footer, pageNumber, watermark, frontMatter]
+      properties:
+        header:
+          type: string
+        footer:
+          type: string
+        pageNumber:
+          type: string
+        watermark:
+          type: string
+        frontMatter:
+          type: string
+    ExtractionConfigChunker:
+      type: object
+      required: [providerId, tokenizerId, minimumTokens, targetTokens,
+                 maximumTokens, overlapTokens, providerConfigurationJson]
+      properties:
+        providerId:
+          type: string
+        tokenizerId:
+          type: string
+        minimumTokens:
+          type: integer
+          minimum: 1
+        targetTokens:
+          type: integer
+          minimum: 1
+        maximumTokens:
+          type: integer
+          minimum: 1
+        overlapTokens:
+          type: integer
+          minimum: 0
+        providerConfigurationJson:
+          type: string
+          description: 已规范化、可复现的 provider 配置 JSON。
+    ExtractionPreview:
+      type: object
+      description: 有界持久化预览；不包含完整原件、contextualText、Token 或模型原始响应。
+      required: [artifactId, artifactLength, totalElementCount, totalChunkCount,
+                 truncated, elements, chunks]
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        artifactLength:
+          type: integer
+          minimum: 0
+        totalElementCount:
+          type: integer
+          minimum: 0
+        totalChunkCount:
+          type: integer
+          minimum: 0
+        truncated:
+          type: boolean
+        elements:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/ExtractionPreviewElement'
+        chunks:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/ExtractionPreviewChunk'
+    ExtractionPreviewElement:
+      type: object
+      required: [id, parentId, type, ordinal, sectionPath, role,
+                 cleaningAction, cleaningReasonCode, sourceRange,
+                 contentLength, text, textTruncated]
+      properties:
+        id:
+          type: string
+          format: uuid
+        parentId:
+          type: string
+          format: uuid
+          nullable: true
+        type:
+          type: string
+        ordinal:
+          type: integer
+          minimum: 0
+        sectionPath:
           type: array
           items:
             type: string
+        role:
+          type: string
+          nullable: true
+        cleaningAction:
+          type: string
+        cleaningReasonCode:
+          type: string
+        sourceRange:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ExtractionArtifactRange'
+        contentLength:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+          maxLength: 1000
+        textTruncated:
+          type: boolean
+    ExtractionPreviewChunk:
+      type: object
+      required: [id, ordinal, sectionPath, contentLength, text, textTruncated, sourceSpans]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+          minimum: 0
+        sectionPath:
+          type: array
+          items:
+            type: string
+        contentLength:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+          maxLength: 1500
+        textTruncated:
+          type: boolean
+        sourceSpans:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/ExtractionElementRange'
+    ExtractionElementRange:
+      type: object
+      required: [elementId, startOffset, endOffset, pageNumber, artifactRange]
+      properties:
+        elementId:
+          type: string
+          format: uuid
+        startOffset:
+          type: integer
+          minimum: 0
+        endOffset:
+          type: integer
+          minimum: 0
+        pageNumber:
+          type: integer
+          minimum: 1
+          nullable: true
+        artifactRange:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ExtractionArtifactRange'
+    ExtractionArtifactRange:
+      type: object
+      description: Normalized Artifact 中的 UTF-16 半开区间。
+      required: [artifactId, startOffset, endOffset, pageNumber]
+      properties:
+        artifactId:
+          type: string
+          format: uuid
+        startOffset:
+          type: integer
+          minimum: 0
+        endOffset:
+          type: integer
+          minimum: 0
+        pageNumber:
+          type: integer
+          minimum: 1
+          nullable: true
+    ExtractionGateReport:
+      type: object
+      required: [status, datasetId, datasetVersion, configFingerprint,
+                 evaluatedAt, cases, errorCode]
+      properties:
+        status:
+          type: string
+          enum: [PASSED, FAILED, ERROR]
+        datasetId:
+          type: string
+        datasetVersion:
+          type: string
+        configFingerprint:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        evaluatedAt:
+          type: string
+          format: date-time
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtractionGateCase'
+        errorCode:
+          type: string
+          nullable: true
+    ExtractionGateCase:
+      type: object
+      required: [caseId, sourceSha256, passed, parseSuccessRate,
+                 tokenOverflowCount, invalidSourceSpanCount, sourceAccountingRate,
+                 silentTruncationCount, findings]
+      properties:
+        caseId:
+          type: string
+        sourceSha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        passed:
+          type: boolean
+        parseSuccessRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        tokenOverflowCount:
+          type: integer
+          minimum: 0
+        invalidSourceSpanCount:
+          type: integer
+          minimum: 0
+        sourceAccountingRate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        silentTruncationCount:
+          type: integer
+          minimum: 0
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtractionGateFinding'
+    ExtractionGateFinding:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+          description: 不含正文的稳定短说明。
+    ExtractionDataset:
+      type: object
+      description: 受治理 Dataset 目录项；不返回 Golden Source 正文。
+      required: [id, caseCount, cases]
+      properties:
+        id:
+          type: string
+        caseCount:
+          type: integer
+          minimum: 1
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtractionDatasetCase'
+    ExtractionDatasetCase:
+      type: object
+      required: [id, description, sourceName, sourceSha256, mediaType,
+                 license, reviewedBy, reviewedAt]
+      properties:
+        id:
+          type: string
+        description:
+          type: string
+        sourceName:
+          type: string
+        sourceSha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        mediaType:
+          type: string
+        license:
+          type: string
+        reviewedBy:
+          type: string
+        reviewedAt:
+          type: string
+    ExtractionDatasetRunRequest:
+      type: object
+      required: [language]
+      properties:
+        language:
+          type: string
+          default: zh-CN
+          maxLength: 32
+        baselineRunId:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            可选 Baseline；必须属于同 tenant/space 和同一不可变 Dataset，规范化语言
+            相同，并且已经是 TEST_ONLY、SUCCEEDED 且 Gate 为 PASSED 或 FAILED。
+        testConfig:
+          $ref: '#/components/schemas/DocumentProcessingConfiguration'
+    ExtractionItemDiagnostics:
+      type: object
+      required: [parserId, processorVersion, elementCount, chunkCount, parseDurationMs,
+                  cleanDurationMs, chunkDurationMs, cleaning, chunking]
+      properties:
+        parserId:
+          type: string
+        processorVersion:
+          type: string
+          maxLength: 64
+          description: 本次实际 ExtractionEngine 合同指纹，用于复现实验结果。
+        elementCount:
+          type: integer
+        chunkCount:
+          type: integer
+        parseDurationMs:
+          type: integer
+          format: int64
+        cleanDurationMs:
+          type: integer
+          format: int64
+        chunkDurationMs:
+          type: integer
+          format: int64
+        cleaning:
+          $ref: '#/components/schemas/ExtractionCleaningDiagnostics'
+        chunking:
+          $ref: '#/components/schemas/ExtractionChunkingDiagnostics'
+    ExtractionCleaningDiagnostics:
+      type: object
+      description: Clean 阶段的元素去向与稳定原因码计数；不含文档正文。
+      required: [indexableElements, metadataOnlyElements, reasonCodeCounts]
+      properties:
+        indexableElements:
+          type: integer
+          minimum: 0
+        metadataOnlyElements:
+          type: integer
+          minimum: 0
+        reasonCodeCounts:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+    ExtractionChunkingDiagnostics:
+      type: object
+      description: 固定 16 项 Chunk 边界规划、语义建议应用和最终大小分布指标。
+      required: [structuralHardBreaks, baselineSoftBreaks,
+                 semanticCandidateBoundaries, semanticCutSuggestions,
+                 semanticJoinSuggestions, semanticNeutralSuggestions,
+                 semanticCutsAdded, semanticJoinsApplied, semanticNoOps,
+                 tokenLimitBreaks, spanLimitBreaks, rejectedSemanticJoins,
+                 finalChunkCount, minimumChunkUnits, averageChunkUnits,
+                 maximumChunkUnits]
+      properties:
+        structuralHardBreaks:
+          type: integer
+          minimum: 0
+        baselineSoftBreaks:
+          type: integer
+          minimum: 0
+        semanticCandidateBoundaries:
+          type: integer
+          minimum: 0
+        semanticCutSuggestions:
+          type: integer
+          minimum: 0
+        semanticJoinSuggestions:
+          type: integer
+          minimum: 0
+        semanticNeutralSuggestions:
+          type: integer
+          minimum: 0
+        semanticCutsAdded:
+          type: integer
+          minimum: 0
+        semanticJoinsApplied:
+          type: integer
+          minimum: 0
+        semanticNoOps:
+          type: integer
+          minimum: 0
+        tokenLimitBreaks:
+          type: integer
+          minimum: 0
+        spanLimitBreaks:
+          type: integer
+          minimum: 0
+        rejectedSemanticJoins:
+          type: integer
+          minimum: 0
+        finalChunkCount:
+          type: integer
+          minimum: 0
+        minimumChunkUnits:
+          type: integer
+          minimum: 0
+        averageChunkUnits:
+          type: number
+          format: double
+          minimum: 0
+        maximumChunkUnits:
+          type: integer
+          minimum: 0
     SourceObjectResponse:
       type: object
       required: [documentId, revisionId, documentStatus, originalFileName, mediaType, contentLength, checksumSha256, storedAt, previewable]
@@ -1473,8 +2995,372 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProjectionType'
+    RetrievalFirstRoundConfiguration:
+      type: object
+      additionalProperties: false
+      required: [termExpansionEnabled, terminologyResourceId, maximumExpansionTerms]
+      properties:
+        termExpansionEnabled:
+          type: boolean
+        terminologyResourceId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        maximumExpansionTerms:
+          type: integer
+          minimum: 0
+          maximum: 64
+    RetrievalBranchConfiguration:
+      type: object
+      additionalProperties: false
+      required: [enabled, topK, rrfWeight]
+      properties:
+        enabled:
+          type: boolean
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        rrfWeight:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+    RetrievalChannelConfigurations:
+      type: object
+      additionalProperties: false
+      required: [KEYWORD, VECTOR, GRAPH, PAGE]
+      properties:
+        KEYWORD:
+          $ref: '#/components/schemas/RetrievalBranchConfiguration'
+        VECTOR:
+          $ref: '#/components/schemas/RetrievalBranchConfiguration'
+        GRAPH:
+          $ref: '#/components/schemas/RetrievalBranchConfiguration'
+        PAGE:
+          $ref: '#/components/schemas/RetrievalBranchConfiguration'
+    RetrievalBranchesConfiguration:
+      type: object
+      additionalProperties: false
+      required: [maximumVariantsPerAttempt, maximumRetrievalBranches, rrfConstant, channels]
+      properties:
+        maximumVariantsPerAttempt:
+          type: integer
+          minimum: 1
+          maximum: 16
+        maximumRetrievalBranches:
+          type: integer
+          minimum: 1
+          maximum: 64
+        rrfConstant:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        channels:
+          $ref: '#/components/schemas/RetrievalChannelConfigurations'
+    RetrievalRerankerConfiguration:
+      type: object
+      additionalProperties: false
+      required: [enabled, providerId, modelId, candidateLimit, outputTopK]
+      properties:
+        enabled:
+          type: boolean
+        providerId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        modelId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        candidateLimit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        outputTopK:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Must not exceed candidateLimit.
+    RetrievalCoverageConfiguration:
+      type: object
+      additionalProperties: false
+      required: [enabled, providerId, modelId, promptVersion, memoryLimit, sufficiencyThreshold]
+      properties:
+        enabled:
+          type: boolean
+        providerId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        modelId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        promptVersion:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        memoryLimit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        sufficiencyThreshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+    RetrievalChainNodeEnables:
+      type: object
+      additionalProperties: false
+      required: [GAP_QUERY, PRF, RELAX_CONSTRAINTS, NARROW_CONSTRAINTS, STEP_BACK, HYDE, NEXT_SPACE]
+      properties:
+        GAP_QUERY: {type: boolean}
+        PRF: {type: boolean}
+        RELAX_CONSTRAINTS: {type: boolean}
+        NARROW_CONSTRAINTS: {type: boolean}
+        STEP_BACK: {type: boolean}
+        HYDE: {type: boolean}
+        NEXT_SPACE: {type: boolean}
+    RetrievalCrossSpaceConfiguration:
+      type: object
+      additionalProperties: false
+      required: [enabled, maximumSpaces]
+      properties:
+        enabled:
+          type: boolean
+        maximumSpaces:
+          type: integer
+          minimum: 1
+          maximum: 16
+          description: Includes the starting Space; enabled requires at least two.
+    RetrievalConfiguration:
+      type: object
+      additionalProperties: false
+      required: [firstRound, branches, reranker, coverage, maximumRetrievalAttempts, chainNodeEnables, crossSpace]
+      properties:
+        firstRound:
+          $ref: '#/components/schemas/RetrievalFirstRoundConfiguration'
+        branches:
+          $ref: '#/components/schemas/RetrievalBranchesConfiguration'
+        reranker:
+          $ref: '#/components/schemas/RetrievalRerankerConfiguration'
+        coverage:
+          $ref: '#/components/schemas/RetrievalCoverageConfiguration'
+        maximumRetrievalAttempts:
+          type: integer
+          minimum: 1
+          maximum: 16
+        chainNodeEnables:
+          $ref: '#/components/schemas/RetrievalChainNodeEnables'
+        crossSpace:
+          $ref: '#/components/schemas/RetrievalCrossSpaceConfiguration'
+    SpaceRetrievalConfiguration:
+      type: object
+      required: [spaceId, revision, fingerprint, configuration, createdBy, createdAt]
+      properties:
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        fingerprint:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Stable SHA-256 derived only from effective retrieval semantics.
+        configuration:
+          $ref: '#/components/schemas/RetrievalConfiguration'
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    UpdateSpaceRetrievalConfigurationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, configuration]
+      properties:
+        expectedRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        configuration:
+          $ref: '#/components/schemas/RetrievalConfiguration'
+    RetrievalFirstRoundOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        termExpansionEnabled: {type: boolean}
+        terminologyResourceId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        maximumExpansionTerms:
+          type: integer
+          minimum: 0
+          maximum: 64
+    RetrievalBranchOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        rrfWeight:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+    RetrievalChannelOverrides:
+      type: object
+      additionalProperties: false
+      properties:
+        KEYWORD:
+          $ref: '#/components/schemas/RetrievalBranchOverride'
+        VECTOR:
+          $ref: '#/components/schemas/RetrievalBranchOverride'
+        GRAPH:
+          $ref: '#/components/schemas/RetrievalBranchOverride'
+        PAGE:
+          $ref: '#/components/schemas/RetrievalBranchOverride'
+    RetrievalBranchesOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        maximumVariantsPerAttempt:
+          type: integer
+          minimum: 1
+          maximum: 16
+        maximumRetrievalBranches:
+          type: integer
+          minimum: 1
+          maximum: 64
+        rrfConstant:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        channels:
+          $ref: '#/components/schemas/RetrievalChannelOverrides'
+    RetrievalRerankerOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        providerId: {type: string, maxLength: 64}
+        modelId: {type: string, maxLength: 128}
+        candidateLimit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        outputTopK:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    RetrievalCoverageOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        providerId: {type: string, maxLength: 64}
+        modelId: {type: string, maxLength: 128}
+        promptVersion: {type: string, maxLength: 128}
+        memoryLimit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        sufficiencyThreshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+    RetrievalChainNodeOverrides:
+      type: object
+      additionalProperties: false
+      properties:
+        GAP_QUERY: {type: boolean}
+        PRF: {type: boolean}
+        RELAX_CONSTRAINTS: {type: boolean}
+        NARROW_CONSTRAINTS: {type: boolean}
+        STEP_BACK: {type: boolean}
+        HYDE: {type: boolean}
+        NEXT_SPACE: {type: boolean}
+    RetrievalCrossSpaceOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        maximumSpaces:
+          type: integer
+          minimum: 1
+          maximum: 16
+    RetrievalConfigurationOverride:
+      type: object
+      additionalProperties: false
+      properties:
+        firstRound:
+          $ref: '#/components/schemas/RetrievalFirstRoundOverride'
+        branches:
+          $ref: '#/components/schemas/RetrievalBranchesOverride'
+        reranker:
+          $ref: '#/components/schemas/RetrievalRerankerOverride'
+        coverage:
+          $ref: '#/components/schemas/RetrievalCoverageOverride'
+        maximumRetrievalAttempts:
+          type: integer
+          minimum: 1
+          maximum: 16
+        chainNodeEnables:
+          $ref: '#/components/schemas/RetrievalChainNodeOverrides'
+        crossSpace:
+          $ref: '#/components/schemas/RetrievalCrossSpaceOverride'
+    EvidenceRequirement:
+      type: object
+      additionalProperties: false
+      required: [id, description]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    RetrievalConstraints:
+      type: object
+      additionalProperties: false
+      properties:
+        relaxableFilters:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Initial filters that the caller explicitly allows RELAX_CONSTRAINTS to remove. Only `language` and `sourceType` are accepted.
+        narrowingFilters:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Caller-provided filters that are inactive initially and may be applied by NARROW_CONSTRAINTS. Only `language` and `sourceType` are accepted.
     KnowledgeQueryRequest:
       type: object
+      additionalProperties: false
       required: [query]
       properties:
         query:
@@ -1500,10 +3386,36 @@ components:
             type: string
             minLength: 1
             maxLength: 128
-          description: Only `language` and `sourceType` keys are accepted.
+          description: Hard filters that are always applied and can never be relaxed. Only `language` and `sourceType` keys are accepted.
+        constraints:
+          allOf:
+            - $ref: '#/components/schemas/RetrievalConstraints'
+          default: {}
+          description: Explicitly mutable logical filters. Keys must not overlap with hard filters or each other.
+        retrievalTarget:
+          type: string
+          maxLength: 4000
+          default: ''
+        evidenceRequirements:
+          type: array
+          maxItems: 32
+          default: []
+          items:
+            $ref: '#/components/schemas/EvidenceRequirement'
+        configurationOverride:
+          allOf:
+            - $ref: '#/components/schemas/RetrievalConfigurationOverride'
+          default: {}
+          description: Typed per-request partial override; omitted fields inherit the Space revision.
+        testMode:
+          type: boolean
+          default: false
+          description: Uses TEST_PLAZA observation purpose without bypassing the production path.
     KnowledgeQueryResponse:
       type: object
-      required: [requestId, traceId, tenantId, evidences, sufficient, warnings, generatedAt]
+      required: [requestId, traceId, tenantId, evidences, sufficient, terminalStatus,
+                 stopReason, degraded, visitedSpaceIds, configurationFingerprints,
+                 warnings, generatedAt]
       properties:
         requestId:
           type: string
@@ -1519,6 +3431,27 @@ components:
             $ref: '#/components/schemas/KnowledgeEvidence'
         sufficient:
           type: boolean
+        terminalStatus:
+          type: string
+          enum: [SUFFICIENT, INSUFFICIENT, NOT_EVALUATED, EVIDENCE_REQUIREMENTS_MISSING, CHECK_FAILED, TECHNICAL_FAILED]
+        stopReason:
+          type: string
+          enum: [SUFFICIENCY_THRESHOLD_REACHED, COVERAGE_DISABLED, EVIDENCE_REQUIREMENTS_MISSING,
+                 COVERAGE_CHECK_FAILED, RETRIEVAL_BUDGET_EXHAUSTED, OPTIMIZATION_CHAIN_EXHAUSTED,
+                 NO_APPLICABLE_OPTIMIZATION_NODE, TECHNICAL_FAILURE]
+        degraded:
+          type: boolean
+        visitedSpaceIds:
+          type: array
+          description: Space visit order selected by routing and fixed NEXT_SPACE progression.
+          items:
+            type: string
+        configurationFingerprints:
+          type: array
+          description: Effective configuration fingerprint for each visited Space in visit order.
+          items:
+            type: string
+            pattern: '^[0-9a-f]{64}$'
         warnings:
           type: array
           items:
@@ -1538,6 +3471,7 @@ components:
         relevance:
           type: number
           format: double
+          description: Final score for this query. It is a model score after successful reranking, otherwise the fused score.
         authority:
           type: integer
         channels:
@@ -1549,7 +3483,7 @@ components:
           $ref: '#/components/schemas/KnowledgeCitation'
     KnowledgeCitation:
       type: object
-      required: [documentId, revisionId, chunkId, title, sectionPath, sourceUri]
+      required: [documentId, revisionId, chunkId, title, sectionPath, sourceUri, sourceSpans]
       properties:
         documentId:
           type: string
@@ -1567,6 +3501,257 @@ components:
             type: string
         sourceUri:
           type: string
+        sourceSpans:
+          type: array
+          description: Element-relative UTF-16 ranges. Historical rows may return an empty array.
+          items:
+            $ref: '#/components/schemas/KnowledgeSourceSpan'
+    KnowledgeSourceSpan:
+      type: object
+      required: [elementId, startOffset, endOffset]
+      properties:
+        elementId:
+          type: string
+          format: uuid
+        startOffset:
+          type: integer
+          minimum: 0
+          description: Inclusive UTF-16 offset in the source element text.
+        endOffset:
+          type: integer
+          minimum: 1
+          description: Exclusive UTF-16 offset in the source element text.
+        pageNumber:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: One-based page number when the parser can provide it; bounding boxes are not implemented.
+    RetrievalObservationPurpose:
+      type: string
+      enum: [ONLINE, EVALUATION, TEST_PLAZA, SHADOW, REPLAY]
+    RetrievalObservationCompleteness:
+      type: string
+      enum: [COMPLETE, INCOMPLETE]
+    RetrievalObservationIncompleteReason:
+      type: string
+      enum: [STARTED_MISSING, TERMINAL_MISSING, SEQUENCE_GAP]
+    RetrievalObservationStage:
+      type: string
+      enum: [EXECUTION_STARTED, SPACE_ROUTING, CONFIGURATION_RESOLVED, QUERY_ANALYSIS,
+             QUERY_PLANNING, RETRIEVAL_PLAN, RETRIEVAL_BRANCH, FUSION, RERANK,
+             COVERAGE_CHECK, CHAIN_NODE_EVALUATED, CHAIN_NODE_COMPLETED,
+             SPACE_CHANGED, EVIDENCE_BUILD, EXECUTION_TERMINAL, STAGE_FAILURE]
+    RetrievalObservationStatus:
+      type: string
+      enum: [STARTED, SUCCEEDED, DEGRADED, SKIPPED, FAILED, TIMED_OUT,
+             CANCELLED, REJECTED, NOT_CONFIGURED]
+    RetrievalVisitedConfiguration:
+      type: object
+      required: [visitIndex, spaceId, sourceRevision, fingerprint]
+      properties:
+        visitIndex:
+          type: integer
+          minimum: 0
+        spaceId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        sourceRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        fingerprint:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    RetrievalObservationEvent:
+      type: object
+      description: Safe stage fact; raw typed event payload is intentionally excluded.
+      required: [eventId, sequence, spaceIds, visitIndex, attemptIndex, stage, status,
+                 reasonCode, configFingerprint, startedAt, completedAt, durationMillis,
+                 inputCount, outputCount, schemaVersion]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+        spaceIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        visitIndex:
+          type: integer
+          minimum: 0
+        attemptIndex:
+          type: integer
+          minimum: 0
+        stage:
+          $ref: '#/components/schemas/RetrievalObservationStage'
+        status:
+          $ref: '#/components/schemas/RetrievalObservationStatus'
+        reasonCode:
+          type: string
+          maxLength: 64
+        configFingerprint:
+          type: string
+          pattern: '^(UNRESOLVED|[0-9a-f]{64})$'
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        durationMillis:
+          type: integer
+          format: int64
+          minimum: 0
+        inputCount:
+          type: integer
+          minimum: 0
+        outputCount:
+          type: integer
+          minimum: 0
+        schemaVersion:
+          type: integer
+          minimum: 1
+    RetrievalMetricDimensions:
+      type: object
+      additionalProperties: false
+      required: [space, queryCase, config, strategy, attempt, componentModel,
+                 dataIndexVersion, status, stopReason, purpose, timeSlice]
+      properties:
+        space:
+          type: string
+          nullable: true
+        queryCase:
+          type: string
+          format: uuid
+          nullable: true
+          description: Present only for Gold-bound offline facts, never runtime facts.
+        config:
+          type: string
+          pattern: '^(UNRESOLVED|[0-9a-f]{64})$'
+        strategy:
+          type: string
+          nullable: true
+        attempt:
+          type: string
+          nullable: true
+          pattern: '^[0-9]+$'
+        componentModel:
+          type: string
+          nullable: true
+        dataIndexVersion:
+          type: string
+          nullable: true
+        status:
+          type: string
+        stopReason:
+          type: string
+          nullable: true
+        purpose:
+          $ref: '#/components/schemas/RetrievalObservationPurpose'
+        timeSlice:
+          type: string
+          description: Explicit granularity and aligned UTC instant, for example HOUR:2026-08-26T08:00:00Z.
+    RetrievalMetricGoldReference:
+      type: object
+      required: [datasetId, datasetVersion, caseId]
+      properties:
+        datasetId:
+          type: string
+          format: uuid
+        datasetVersion:
+          type: integer
+          format: int64
+          minimum: 1
+        caseId:
+          type: string
+          format: uuid
+    RetrievalMetric:
+      type: object
+      required: [sourceEventId, type, metricKey, metricDefinitionVersion,
+                 aggregation, value, dimensions, observedAt, goldReference]
+      properties:
+        sourceEventId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [RUNTIME, OFFLINE_GOLD]
+        metricKey:
+          type: string
+          pattern: '^[a-z][a-z0-9_.-]{0,127}$'
+        metricDefinitionVersion:
+          type: integer
+          minimum: 1
+        aggregation:
+          type: string
+          enum: [COUNT, SUM, DISTRIBUTION, MACRO_AVERAGE, RATIO_NUMERATOR, RATIO_DENOMINATOR]
+        value:
+          type: number
+          format: double
+        dimensions:
+          $ref: '#/components/schemas/RetrievalMetricDimensions'
+        observedAt:
+          type: string
+          format: date-time
+        goldReference:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/RetrievalMetricGoldReference'
+    RetrievalObservationReport:
+      type: object
+      required: [requestId, executionId, purpose, completeness, incompleteReasons,
+                 missingSequences, spaceIds, visitedConfigurations, eventCount, events, metrics]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        executionId:
+          type: string
+          format: uuid
+        purpose:
+          $ref: '#/components/schemas/RetrievalObservationPurpose'
+        completeness:
+          $ref: '#/components/schemas/RetrievalObservationCompleteness'
+        incompleteReasons:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/RetrievalObservationIncompleteReason'
+        missingSequences:
+          type: array
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+            minimum: 0
+        spaceIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        visitedConfigurations:
+          type: array
+          description: Ordered by visitIndex and identifies the actual Space revision and effective fingerprint.
+          items:
+            $ref: '#/components/schemas/RetrievalVisitedConfiguration'
+        eventCount:
+          type: integer
+          minimum: 1
+        events:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/RetrievalObservationEvent'
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetrievalMetric'
     ObsidianConnectorRequest:
       type: object
       required: [connectorId, spaceId, displayName, vaultName, vaultPath]

@@ -9,6 +9,10 @@ import dev.infinityknowledge.domain.identity.PrincipalId;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.retrieval.KnowledgeQuery;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
+import dev.infinityknowledge.domain.retrieval.RetrievalStopReason;
+import dev.infinityknowledge.domain.retrieval.RetrievalTerminalStatus;
+import dev.infinityknowledge.domain.retrieval.configuration.RetrievalConfigurationOverride;
+import dev.infinityknowledge.domain.retrieval.observation.RetrievalObservationPurpose;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.KnowledgeGateway;
 import org.junit.jupiter.api.Test;
@@ -106,7 +110,12 @@ class RetrievalEvaluationRunnerTest {
                 text,
                 Set.of(new KnowledgeSpaceId("engineering")),
                 2,
-                Map.of()
+                Map.of(),
+                dev.infinityknowledge.domain.retrieval.RetrievalConstraintInput.empty(),
+                "",
+                List.of(),
+                RetrievalConfigurationOverride.empty(),
+                RetrievalObservationPurpose.EVALUATION
         );
     }
 
@@ -138,7 +147,11 @@ class RetrievalEvaluationRunnerTest {
                 UUID.randomUUID(),
                 query.principal().tenantId(),
                 evidences,
-                true,
+                RetrievalTerminalStatus.SUFFICIENT,
+                RetrievalStopReason.SUFFICIENCY_THRESHOLD_REACHED,
+                false,
+                List.of(query.spaceIds().iterator().next()),
+                List.of("a".repeat(64)),
                 List.of(),
                 Instant.parse("2026-07-26T00:00:00Z")
         );

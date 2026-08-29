@@ -60,7 +60,7 @@ class MilvusVectorRetrieverTest {
                 "language", "zh-CN",
                 "sourceType", "OBSIDIAN"
         );
-        var query = new KnowledgeQuery(
+        var query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal,
                 "Redis timeout",

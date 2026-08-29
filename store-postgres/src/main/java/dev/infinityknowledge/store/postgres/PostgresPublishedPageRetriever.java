@@ -1,14 +1,19 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
+import dev.infinityknowledge.spi.retrieval.RetrievalComponentVersion;
 import dev.infinityknowledge.spi.retrieval.Retriever;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Arrays;
 import java.util.List;
@@ -17,11 +22,14 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Routes queries through published Wiki pages and returns their original active source chunks.
- * Generated page prose never masquerades as primary evidence: every result retains a real
- * document, revision and chunk citation accepted by the normal active-revision guard.
+ * 经已发布 Wiki 页面路由查询，并返回其原始活动来源 Chunk。
+ *
+ * <p>生成页面的文字不能伪装为一手证据；每个结果仍保留通过常规活动修订守卫的
+ * 真实文档、修订和 Chunk 引用。</p>
  */
 public final class PostgresPublishedPageRetriever implements Retriever {
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String SQL = """
             WITH page_matches AS (
                 SELECT p.tenant_id, p.id AS page_id, p.space_id, p.slug,
@@ -54,7 +62,7 @@ public final class PostgresPublishedPageRetriever implements Retriever {
             ), routed AS (
                 SELECT c.id AS chunk_id, c.tenant_id, c.space_id,
                        c.document_id, c.revision_id, d.title, d.source_uri,
-                       d.authority, c.content,
+                       d.authority, c.content, c.source_spans_json::text AS source_spans_json,
                        COALESCE((
                            SELECT string_agg(value, chr(31))
                              FROM jsonb_array_elements_text(c.section_path_json)
@@ -88,7 +96,7 @@ public final class PostgresPublishedPageRetriever implements Retriever {
                  ORDER BY chunk_id, score DESC, page_id
             )
             SELECT chunk_id, tenant_id, space_id, document_id, revision_id,
-                   title, source_uri, authority, content, section_path,
+                   title, source_uri, authority, content, source_spans_json, section_path,
                    page_id, page_revision_id, slug, page_title, score
               FROM deduplicated
              WHERE score > 0
@@ -100,6 +108,17 @@ public final class PostgresPublishedPageRetriever implements Retriever {
 
     public PostgresPublishedPageRetriever(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc must not be null");
+    }
+
+    /** 返回已发布页面路由到原始 Chunk 的稳定执行合同。 */
+    @Override
+    public RetrievalComponentVersion componentVersion() {
+        return new RetrievalComponentVersion(
+                "retriever-page",
+                "postgresql",
+                "published-page",
+                "v1"
+        );
     }
 
     @Override
@@ -156,7 +175,8 @@ public final class PostgresPublishedPageRetriever implements Retriever {
                                 ).toString(),
                                 "pageSlug", row.getString("slug"),
                                 "pageTitle", row.getString("page_title")
-                        )
+                        ),
+                        sourceSpans(row.getString("source_spans_json"))
                 )
         ));
     }
@@ -171,5 +191,15 @@ public final class PostgresPublishedPageRetriever implements Retriever {
             return List.of();
         }
         return Arrays.stream(value.split("\u001F", -1)).toList();
+    }
+
+    private static List<ChunkSourceSpan> sourceSpans(String value) {
+        try {
+            return value == null || value.isBlank()
+                    ? List.of()
+                    : JSON.readValue(value, new TypeReference<List<ChunkSourceSpan>>() { });
+        } catch (JacksonException failure) {
+            throw new IllegalStateException("stored chunk source spans are invalid", failure);
+        }
     }
 }

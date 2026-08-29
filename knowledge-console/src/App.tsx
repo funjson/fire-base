@@ -21,9 +21,19 @@ const DashboardPage = lazy(() =>
 const SpacesPage = lazy(() =>
   import('./pages/SpacesPage').then((module) => ({ default: module.SpacesPage })),
 )
+const SpaceExtractionPage = lazy(() =>
+  import('./pages/SpaceExtractionPage').then((module) => ({
+    default: module.SpaceExtractionPage,
+  })),
+)
 const DocumentsPage = lazy(() =>
   import('./pages/DocumentsPage').then((module) => ({
     default: module.DocumentsPage,
+  })),
+)
+const DocumentDetailPage = lazy(() =>
+  import('./pages/DocumentDetailPage').then((module) => ({
+    default: module.DocumentDetailPage,
   })),
 )
 const WikiPagesPage = lazy(() =>
@@ -118,8 +128,16 @@ function AuthGate() {
                 <Route index element={<HomePage />} />
                 <Route path="spaces" element={<AdminPage page={<SpacesPage />} />} />
                 <Route
+                  path="spaces/:spaceId/extraction"
+                  element={<AdminPage page={<SpaceExtractionPage />} />}
+                />
+                <Route
                   path="documents"
                   element={<AdminPage page={<DocumentsPage />} />}
+                />
+                <Route
+                  path="documents/:documentId"
+                  element={<AdminPage page={<DocumentDetailPage />} />}
                 />
                 <Route
                   path="wiki"
@@ -129,9 +147,20 @@ function AuthGate() {
                   path="graph"
                   element={<AdminPage page={<GraphPage />} />}
                 />
-                <Route path="retrieval" element={<RetrievalPage />} />
+                <Route
+                  path="retrieval"
+                  element={<Navigate replace to="/evaluations/playground" />}
+                />
                 <Route
                   path="evaluations"
+                  element={<Navigate replace to="/evaluations/playground" />}
+                />
+                <Route
+                  path="evaluations/playground"
+                  element={<RetrievalPage />}
+                />
+                <Route
+                  path="evaluations/datasets"
                   element={<AdminPage page={<EvaluationsPage />} />}
                 />
                 <Route
@@ -161,7 +190,7 @@ function HomePage() {
   return auth.roles.includes('knowledge-admin') ? (
     <DashboardPage />
   ) : (
-    <Navigate replace to="/retrieval" />
+    <Navigate replace to="/evaluations/playground" />
   )
 }
 
@@ -170,7 +199,7 @@ function AdminPage({ page }: { page: ReactNode }) {
   return auth.roles.includes('knowledge-admin') ? (
     page
   ) : (
-    <Navigate replace to="/retrieval" />
+    <Navigate replace to="/evaluations/playground" />
   )
 }
 

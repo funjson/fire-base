@@ -8,6 +8,7 @@ import dev.infinityknowledge.domain.document.SourceObjectReference;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteBatch;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteResult;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriter;
+import dev.infinityknowledge.spi.ingestion.DocumentProcessingContractMismatchException;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
 import dev.infinityknowledge.spi.management.DocumentLifecycleConflictException;
 import org.springframework.jdbc.core.ConnectionCallback;
@@ -50,12 +51,12 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
     }
 
     /**
-     * Creates a writer with transactional projection-job emission.
+     * 创建能够在事务内投递向量投影任务的写入器。
      *
-     * @param jdbc JDBC template
-     * @param transaction transaction template
-     * @param jsonMapper JSON mapper
-     * @param vectorProjectionEnabled whether new revisions enqueue vector projection
+     * @param jdbc JDBC 模板
+     * @param transaction 事务模板
+     * @param jsonMapper JSON 编解码器
+     * @param vectorProjectionEnabled 新修订是否投递向量投影
      */
     public PostgresKnowledgeWriter(
             JdbcTemplate jdbc,
@@ -72,7 +73,7 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
     }
 
     /**
-     * Creates a writer that transactionally emits every configured projection type.
+     * 创建能够在事务内投递全部已配置投影类型的写入器。
      */
     public PostgresKnowledgeWriter(
             JdbcTemplate jdbc,
@@ -112,6 +113,7 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
         var revision = batch.revision();
         String tenantId = document.tenantId().value();
         lockAndValidateConnectorFence(batch);
+        lockAndValidateDocumentProcessingConfig(batch);
         lockDocumentIdentity(tenantId, document.id().value());
         Optional<StoredDocumentState> storedDocument = lockAndInspectDocument(batch);
         storedDocument.ifPresent(stored -> {
@@ -151,7 +153,8 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                     stored.id(),
                     changed,
                     stored.chunkCount(),
-                    sourceObjectAccepted
+                    sourceObjectAccepted,
+                    enabledProjections
             );
         }
         long revisionNumber = nextRevisionNumber(tenantId, document.id().value());
@@ -189,13 +192,14 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                 revision.id(),
                 true,
                 batch.chunks().size(),
-                sourceObjectAccepted
+                sourceObjectAccepted,
+                enabledProjections
         );
     }
 
     /**
-     * Locks and validates an optional connector lease in this knowledge-write transaction.
-     * A takeover cannot pass the connector row lock until the revision commit finishes.
+     * 在知识写入事务内锁定并校验可选的连接器租约。
+     * 接管者在修订提交完成前不能越过连接器行锁。
      */
     private void lockAndValidateConnectorFence(KnowledgeWriteBatch batch) {
         var fence = batch.connectorWriteFence();
@@ -222,11 +226,47 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
     }
 
     /**
-     * Persists at most one authoritative original object for a revision.
+     * 锁定目标空间并校验任务引用的是创建时固化的处理配置。
      *
-     * <p>Concurrent duplicate uploads use distinct object IDs. The document advisory lock
-     * serializes this decision; callers delete an object when this method reports it was
-     * not accepted.</p>
+     * <p>配置固定为版本 1，不存在创建后的保存或升级。这里的栅栏用于拒绝配置行
+     * 缺失、Space 非活动或任务携带错误版本的发布，防止异常任务绕过创建契约。</p>
+     */
+    private void lockAndValidateDocumentProcessingConfig(KnowledgeWriteBatch batch) {
+        long expectedVersion = batch.expectedDocumentProcessingConfigVersion();
+        String expectedFingerprint = batch.expectedDocumentProcessingContractFingerprint();
+        var document = batch.document();
+        ProcessingFence actual = jdbc.query("""
+                SELECT p.version, p.processing_contract_fingerprint
+                  FROM knowledge_space s
+                  JOIN space_document_processing_config p
+                    ON p.tenant_id = s.tenant_id
+                   AND p.space_id = s.id
+                 WHERE s.tenant_id = ?
+                   AND s.id = ?
+                   AND s.status = 'ACTIVE'
+                 FOR UPDATE OF s
+                """, result -> result.next()
+                        ? new ProcessingFence(result.getLong(1), result.getString(2))
+                        : null,
+                document.tenantId().value(),
+                document.spaceId().value()
+        );
+        if (actual == null
+                || expectedVersion != actual.version()
+                || !expectedFingerprint.equals(actual.fingerprint())) {
+            throw new DocumentProcessingContractMismatchException();
+        }
+    }
+
+    /** 发布事务锁定后读取的不可变 Space 处理栅栏。 */
+    private record ProcessingFence(long version, String fingerprint) {
+    }
+
+    /**
+     * 每个修订至多持久化一个权威原文件对象。
+     *
+     * <p>并发重复上传使用不同对象 ID。文档咨询锁会串行化这一决定；本方法返回
+     * 未接纳时，由调用方删除对应对象。</p>
      */
     private boolean persistSourceObject(
             String tenantId,
@@ -282,9 +322,7 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
         });
     }
 
-    /**
-     * Emits the vector job in the same transaction as revision publication.
-     */
+    /** 在发布修订的同一事务中投递全部已启用的异构投影作业。 */
     private void enqueueProjection(
             KnowledgeWriteBatch batch,
             UUID revisionId,
@@ -580,8 +618,8 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                 INSERT INTO knowledge_chunk
                     (tenant_id, id, space_id, document_id, revision_id, ordinal,
                      section_path_json, element_ids_json, content, content_hash,
-                     metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?::jsonb, now())
+                     contextual_text, source_spans_json, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?::jsonb, ?::jsonb, now())
                 """,
                 chunk.tenantId().value(),
                 chunk.id(),
@@ -593,6 +631,8 @@ public final class PostgresKnowledgeWriter implements KnowledgeWriter {
                 json(chunk.elementIds()),
                 chunk.content(),
                 chunk.contentHash(),
+                chunk.contextualText(),
+                json(chunk.sourceSpans()),
                 json(chunk.metadata())
         );
     }

@@ -34,11 +34,16 @@ public final class PostgresKnowledgeAdministrationStore
     public Overview overview(TenantId tenantId) {
         Objects.requireNonNull(tenantId, "tenantId must not be null");
         String value = tenantId.value();
+        // API 上传记录只是每个 Space 的系统来源身份，不属于用户管理的外部数据源。
         return new Overview(
                 count("knowledge_space", "status <> 'DELETED'", value),
                 count("knowledge_document", "status = 'ACTIVE'", value),
                 count("knowledge_chunk", "TRUE", value),
-                count("connector_instance", "status <> 'DELETED'", value),
+                count(
+                        "connector_instance",
+                        "status <> 'DELETED' AND connector_type NOT IN ('API', 'API_UPLOAD')",
+                        value
+                ),
                 count(
                         "projection_job",
                         "status IN ('PENDING', 'RETRY', 'RUNNING')",
@@ -54,13 +59,15 @@ public final class PostgresKnowledgeAdministrationStore
     public List<Space> spaces(TenantId tenantId) {
         Objects.requireNonNull(tenantId, "tenantId must not be null");
         return jdbc.query("""
-                SELECT s.id, s.name, s.description, s.status, s.version, s.updated_at,
+                SELECT s.id, s.name, s.description, s.status, s.version,
+                       s.created_at, s.updated_at,
                        count(d.id) FILTER (WHERE d.status <> 'DELETED') AS document_count
                   FROM knowledge_space s
                   LEFT JOIN knowledge_document d
                     ON d.tenant_id = s.tenant_id AND d.space_id = s.id
                  WHERE s.tenant_id = ? AND s.status <> 'DELETED'
-                 GROUP BY s.id, s.name, s.description, s.status, s.version, s.updated_at
+                 GROUP BY s.id, s.name, s.description, s.status, s.version,
+                          s.created_at, s.updated_at
                  ORDER BY s.updated_at DESC, s.id
                 """, (row, number) -> new Space(
                 row.getString("id"),
@@ -69,6 +76,7 @@ public final class PostgresKnowledgeAdministrationStore
                 row.getString("status"),
                 row.getLong("version"),
                 row.getLong("document_count"),
+                instant(row, "created_at"),
                 instant(row, "updated_at")
         ), tenantId.value());
     }
@@ -82,6 +90,12 @@ public final class PostgresKnowledgeAdministrationStore
         int offset = Math.max(0, filter.offset());
         String spaceId = blankToNull(filter.spaceId());
         String status = blankToNull(filter.status());
+        String title = blankToNull(filter.title());
+        String source = blankToNull(filter.source());
+        String keywordStatus = blankToNull(filter.keywordStatus());
+        String vectorStatus = blankToNull(filter.vectorStatus());
+        Integer minimumChunkCount = nonNegative(filter.minimumChunkCount());
+        Integer maximumChunkCount = nonNegative(filter.maximumChunkCount());
         StringBuilder where = new StringBuilder("""
                  WHERE d.tenant_id = ?
                 """);
@@ -96,6 +110,54 @@ public final class PostgresKnowledgeAdministrationStore
         } else {
             where.append("   AND d.status = ?\n");
             parameters.add(status);
+        }
+        if (title != null) {
+            where.append("   AND lower(d.title) LIKE ? ESCAPE '\\'\n");
+            parameters.add(likePattern(title));
+        }
+        if (source != null) {
+            where.append("""
+                       AND (
+                            lower(d.source_type) LIKE ? ESCAPE '\\'
+                         OR lower(d.source_uri) LIKE ? ESCAPE '\\'
+                         OR EXISTS (
+                                SELECT 1
+                                  FROM document_source_object source_object
+                                 WHERE source_object.tenant_id = d.tenant_id
+                                   AND source_object.revision_id = d.active_revision_id
+                                   AND lower(source_object.original_file_name)
+                                       LIKE ? ESCAPE '\\'
+                            )
+                       )
+                    """);
+            String sourcePattern = likePattern(source);
+            parameters.add(sourcePattern);
+            parameters.add(sourcePattern);
+            parameters.add(sourcePattern);
+        }
+        appendProjectionStatus(where, parameters, "keyword_status", keywordStatus);
+        appendProjectionStatus(where, parameters, "vector_status", vectorStatus);
+        if (minimumChunkCount != null) {
+            appendChunkCount(where, ">=");
+            parameters.add(minimumChunkCount);
+        }
+        if (maximumChunkCount != null) {
+            appendChunkCount(where, "<=");
+            parameters.add(maximumChunkCount);
+        }
+        if (filter.updatedFrom() != null) {
+            where.append("   AND d.updated_at >= ?\n");
+            parameters.add(OffsetDateTime.ofInstant(
+                    filter.updatedFrom(),
+                    java.time.ZoneOffset.UTC
+            ));
+        }
+        if (filter.updatedTo() != null) {
+            where.append("   AND d.updated_at <= ?\n");
+            parameters.add(OffsetDateTime.ofInstant(
+                    filter.updatedTo(),
+                    java.time.ZoneOffset.UTC
+            ));
         }
 
         Long totalValue = jdbc.queryForObject(
@@ -141,26 +203,47 @@ public final class PostgresKnowledgeAdministrationStore
                           so.original_file_name, so.media_type, so.content_length
                  ORDER BY d.updated_at DESC, d.id
                  LIMIT ? OFFSET ?
-                """, (row, number) -> new Document(
-                row.getObject("id", UUID.class),
-                row.getString("space_id"),
-                row.getString("title"),
-                row.getString("source_type"),
-                row.getString("source_uri"),
-                row.getString("status"),
-                row.getInt("authority"),
-                row.getLong("version"),
-                row.getObject("active_revision_id", UUID.class),
-                row.getLong("chunk_count"),
-                row.getString("keyword_status"),
-                row.getString("vector_status"),
-                row.getString("graph_status"),
-                row.getString("original_file_name"),
-                row.getString("source_media_type"),
-                nullableLong(row, "source_content_length"),
-                instant(row, "updated_at")
-        ), pageParameters.toArray());
+                """, this::mapDocument, pageParameters.toArray());
         return new DocumentPage(items, limit, offset, total);
+    }
+
+    @Override
+    public Optional<Document> document(TenantId tenantId, UUID documentId) {
+        Objects.requireNonNull(tenantId, "tenantId must not be null");
+        Objects.requireNonNull(documentId, "documentId must not be null");
+        List<Document> values = jdbc.query("""
+                SELECT d.id, d.space_id, d.title, d.source_type, d.source_uri, d.status,
+                       d.authority, d.version, d.active_revision_id, d.updated_at,
+                       count(c.id) AS chunk_count,
+                       coalesce(p.keyword_status, 'SKIPPED') AS keyword_status,
+                       coalesce(p.vector_status, 'SKIPPED') AS vector_status,
+                       coalesce(p.graph_status, 'SKIPPED') AS graph_status,
+                       so.original_file_name, so.media_type AS source_media_type,
+                       so.content_length AS source_content_length
+                  FROM knowledge_document d
+                  LEFT JOIN knowledge_chunk c
+                    ON c.tenant_id = d.tenant_id
+                   AND c.document_id = d.id
+                   AND c.revision_id = d.active_revision_id
+                  LEFT JOIN LATERAL (
+                        SELECT dip.keyword_status, dip.vector_status, dip.graph_status
+                          FROM document_index_projection dip
+                         WHERE dip.tenant_id = d.tenant_id
+                           AND dip.document_id = d.id
+                           AND dip.revision_id = d.active_revision_id
+                         ORDER BY dip.updated_at DESC
+                         LIMIT 1
+                  ) p ON TRUE
+                  LEFT JOIN document_source_object so
+                    ON so.tenant_id = d.tenant_id
+                   AND so.revision_id = d.active_revision_id
+                 WHERE d.tenant_id = ? AND d.id = ?
+                 GROUP BY d.id, d.space_id, d.title, d.source_type, d.source_uri,
+                          d.status, d.authority, d.version, d.active_revision_id,
+                          d.updated_at, p.keyword_status, p.vector_status, p.graph_status,
+                          so.original_file_name, so.media_type, so.content_length
+                """, this::mapDocument, tenantId.value(), documentId);
+        return values.stream().findFirst();
     }
 
     @Override
@@ -267,7 +350,9 @@ public final class PostgresKnowledgeAdministrationStore
                          ORDER BY started_at DESC
                          LIMIT 1
                   ) r ON TRUE
-                 WHERE c.tenant_id = ? AND c.status <> 'DELETED'
+                 WHERE c.tenant_id = ?
+                   AND c.status <> 'DELETED'
+                   AND c.connector_type NOT IN ('API', 'API_UPLOAD')
                  ORDER BY c.updated_at DESC, c.id
                 """, (row, number) -> new Connector(
                 row.getString("id"),
@@ -334,6 +419,74 @@ public final class PostgresKnowledgeAdministrationStore
                 summary.createdAt(),
                 steps
         ));
+    }
+
+    private Document mapDocument(ResultSet row, int rowNumber) throws SQLException {
+        return new Document(
+                row.getObject("id", UUID.class),
+                row.getString("space_id"),
+                row.getString("title"),
+                row.getString("source_type"),
+                row.getString("source_uri"),
+                row.getString("status"),
+                row.getInt("authority"),
+                row.getLong("version"),
+                row.getObject("active_revision_id", UUID.class),
+                row.getLong("chunk_count"),
+                row.getString("keyword_status"),
+                row.getString("vector_status"),
+                row.getString("graph_status"),
+                row.getString("original_file_name"),
+                row.getString("source_media_type"),
+                nullableLong(row, "source_content_length"),
+                instant(row, "updated_at")
+        );
+    }
+
+    /** 投影状态来自活动修订的最新快照，不能拿任意历史任务状态代替。 */
+    private static void appendProjectionStatus(
+            StringBuilder where,
+            List<Object> parameters,
+            String column,
+            String status
+    ) {
+        if (status == null) {
+            return;
+        }
+        if (!List.of("keyword_status", "vector_status").contains(column)) {
+            throw new IllegalArgumentException("unsupported projection status column");
+        }
+        where.append("   AND coalesce((SELECT dip.")
+                .append(column)
+                .append(" FROM document_index_projection dip ")
+                .append("WHERE dip.tenant_id = d.tenant_id ")
+                .append("AND dip.document_id = d.id ")
+                .append("AND dip.revision_id = d.active_revision_id ")
+                .append("ORDER BY dip.updated_at DESC LIMIT 1), 'SKIPPED') = ?\n");
+        parameters.add(status.strip().toUpperCase(java.util.Locale.ROOT));
+    }
+
+    private static void appendChunkCount(StringBuilder where, String operator) {
+        if (!List.of(">=", "<=").contains(operator)) {
+            throw new IllegalArgumentException("unsupported chunk count operator");
+        }
+        where.append("   AND (SELECT count(*) FROM knowledge_chunk filtered_chunk ")
+                .append("WHERE filtered_chunk.tenant_id = d.tenant_id ")
+                .append("AND filtered_chunk.document_id = d.id ")
+                .append("AND filtered_chunk.revision_id = d.active_revision_id) ")
+                .append(operator)
+                .append(" ?\n");
+    }
+
+    private static String likePattern(String value) {
+        return "%" + value.strip().toLowerCase(java.util.Locale.ROOT)
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_") + "%";
+    }
+
+    private static Integer nonNegative(Integer value) {
+        return value == null ? null : Math.max(0, value);
     }
 
     private long count(String table, String predicate, String tenantId) {

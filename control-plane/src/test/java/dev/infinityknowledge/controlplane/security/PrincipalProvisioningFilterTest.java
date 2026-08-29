@@ -1,6 +1,6 @@
 package dev.infinityknowledge.controlplane.security;
 
-import dev.infinityknowledge.controlplane.application.KnowledgeGovernanceService;
+import dev.infinityknowledge.controlplane.application.governance.KnowledgeGovernanceService;
 import dev.infinityknowledge.domain.identity.PrincipalContext;
 import dev.infinityknowledge.domain.identity.PrincipalId;
 import dev.infinityknowledge.domain.identity.TenantId;
@@ -112,10 +112,11 @@ class PrincipalProvisioningFilterTest {
         }
 
         @Override
-        public void createSpace(
+        public CreateSpaceResult createSpace(
                 PrincipalContext principal,
                 KnowledgeSpaceId spaceId,
                 String name,
+                String description,
                 Instant now
         ) {
             throw new UnsupportedOperationException();

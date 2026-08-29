@@ -2,6 +2,7 @@ package dev.infinityknowledge.domain.retrieval;
 
 import dev.infinityknowledge.domain.common.DomainChecks;
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 
@@ -26,6 +27,7 @@ import java.util.UUID;
  * @param content 候选正文
  * @param sourceUri 来源 URI
  * @param metadata 元数据
+ * @param sourceSpans 可选的原始文本定位范围
  */
 public record RetrievalCandidate(
         UUID chunkId,
@@ -40,7 +42,8 @@ public record RetrievalCandidate(
         List<String> sectionPath,
         String content,
         String sourceUri,
-        Map<String, String> metadata
+        Map<String, String> metadata,
+        List<ChunkSourceSpan> sourceSpans
 ) {
 
     /**
@@ -64,6 +67,21 @@ public record RetrievalCandidate(
         content = DomainChecks.requiredText(content, "candidate content", 100_000);
         sourceUri = DomainChecks.requiredText(sourceUri, "sourceUri", 2048);
         metadata = Map.copyOf(Objects.requireNonNull(metadata, "metadata must not be null"));
+        sourceSpans = List.copyOf(Objects.requireNonNull(
+                sourceSpans,
+                "sourceSpans must not be null"
+        ));
+    }
+
+    /** 兼容尚未传回高亮范围的检索适配器。 */
+    public RetrievalCandidate(
+            UUID chunkId, TenantId tenantId, KnowledgeSpaceId spaceId, DocumentId documentId,
+            UUID revisionId, RetrievalChannel channel, int rank, double score, String title,
+            List<String> sectionPath, String content, String sourceUri, Map<String, String> metadata
+    ) {
+        this(
+                chunkId, tenantId, spaceId, documentId, revisionId, channel, rank, score, title,
+                sectionPath, content, sourceUri, metadata, List.of()
+        );
     }
 }
-

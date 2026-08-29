@@ -4,6 +4,10 @@ import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
+import dev.infinityknowledge.spi.indexing.ActiveIndexGeneration;
+import dev.infinityknowledge.spi.indexing.ActiveIndexGenerationCatalog;
+import dev.infinityknowledge.spi.indexing.IndexGenerationIdentity;
+import dev.infinityknowledge.spi.indexing.IndexPhysicalContract;
 import dev.infinityknowledge.spi.indexing.IndexProjectionStore;
 import dev.infinityknowledge.spi.indexing.ProjectionStatus;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
@@ -11,25 +15,24 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * PostgreSQL source of truth for index generations and projection state.
+ * 使用 PostgreSQL 作为索引代际与投影状态的事实来源。
  */
-public final class PostgresIndexProjectionStore implements IndexProjectionStore {
+public final class PostgresIndexProjectionStore
+        implements IndexProjectionStore, ActiveIndexGenerationCatalog {
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
 
     /**
-     * Creates the store.
+     * 创建投影状态存储实现。
      */
     public PostgresIndexProjectionStore(
             JdbcTemplate jdbc,
@@ -44,7 +47,7 @@ public final class PostgresIndexProjectionStore implements IndexProjectionStore 
             TenantId tenantId,
             KnowledgeSpaceId spaceId,
             EmbeddingSpec embeddingSpec,
-            String generation,
+            IndexPhysicalContract physicalContract,
             String normalizerVersion,
             String chunkerVersion,
             Instant now
@@ -53,9 +56,9 @@ public final class PostgresIndexProjectionStore implements IndexProjectionStore 
         Objects.requireNonNull(spaceId, "spaceId must not be null");
         Objects.requireNonNull(embeddingSpec, "embeddingSpec must not be null");
         Objects.requireNonNull(now, "now must not be null");
-        String configurationHash = configurationHash(
+        String configurationHash = IndexGenerationIdentity.configurationVersion(
                 embeddingSpec,
-                generation,
+                physicalContract,
                 normalizerVersion,
                 chunkerVersion
         );
@@ -104,7 +107,7 @@ public final class PostgresIndexProjectionStore implements IndexProjectionStore 
             GenerationRow row = active.getFirst();
             if (!configurationHash.equals(row.configurationHash())) {
                 throw new IllegalStateException(
-                        "active index generation differs from configured embedding contract"
+                        "active index generation differs from deployed index contract"
                 );
             }
             return row.id();
@@ -113,6 +116,37 @@ public final class PostgresIndexProjectionStore implements IndexProjectionStore 
             throw new IllegalStateException("index generation transaction returned no result");
         }
         return result;
+    }
+
+    /**
+     * 从索引代际事实表读取当前活动版本，不创建代际，也不把配置文件值伪装成索引版本。
+     */
+    @Override
+    public Optional<ActiveIndexGeneration> findActiveGeneration(
+            TenantId tenantId,
+            KnowledgeSpaceId spaceId
+    ) {
+        Objects.requireNonNull(tenantId, "tenantId must not be null");
+        Objects.requireNonNull(spaceId, "spaceId must not be null");
+        List<ActiveIndexGeneration> active = jdbc.query("""
+                SELECT id, configuration_hash
+                FROM index_generation
+                WHERE tenant_id = ? AND space_id = ? AND status = 'ACTIVE'
+                """,
+                (resultSet, rowNumber) -> new ActiveIndexGeneration(
+                        spaceId,
+                        resultSet.getObject("id", UUID.class),
+                        resultSet.getString("configuration_hash")
+                ),
+                tenantId.value(),
+                spaceId.value()
+        );
+        if (active.size() > 1) {
+            throw new IllegalStateException(
+                    "knowledge space has more than one active index generation"
+            );
+        }
+        return active.stream().findFirst();
     }
 
     @Override
@@ -201,31 +235,6 @@ public final class PostgresIndexProjectionStore implements IndexProjectionStore 
                 status,
                 now
         );
-    }
-
-    private static String configurationHash(
-            EmbeddingSpec embeddingSpec,
-            String generation,
-            String normalizerVersion,
-            String chunkerVersion
-    ) {
-        String value = String.join(
-                "\u001F",
-                embeddingSpec.providerId(),
-                embeddingSpec.modelId(),
-                Integer.toString(embeddingSpec.dimensions()),
-                Objects.requireNonNull(generation, "generation must not be null"),
-                Objects.requireNonNull(normalizerVersion, "normalizerVersion must not be null"),
-                Objects.requireNonNull(chunkerVersion, "chunkerVersion must not be null")
-        );
-        try {
-            return HexFormat.of().formatHex(
-                    MessageDigest.getInstance("SHA-256")
-                            .digest(value.getBytes(StandardCharsets.UTF_8))
-            );
-        } catch (NoSuchAlgorithmException unavailable) {
-            throw new IllegalStateException("SHA-256 is unavailable", unavailable);
-        }
     }
 
     private record GenerationRow(UUID id, String configurationHash) {

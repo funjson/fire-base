@@ -10,7 +10,6 @@ import {
   Gauge,
   LogOut,
   Network,
-  Search,
   ShieldCheck,
 } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
@@ -22,15 +21,14 @@ const navigation = [
   { to: '/documents', label: '文档管理', icon: BookOpen, adminOnly: true },
   { to: '/wiki', label: '知识页', icon: BookOpenCheck, adminOnly: true },
   { to: '/graph', label: '知识图谱', icon: Network, adminOnly: true },
-  { to: '/retrieval', label: '检索实验室', icon: Search, adminOnly: false },
   {
     to: '/evaluations',
     label: '评测中心',
     icon: FlaskConical,
-    adminOnly: true,
+    adminOnly: false,
   },
-  { to: '/connectors', label: '数据连接器', icon: Cable, adminOnly: true },
-  { to: '/traces', label: '检索追踪', icon: Activity, adminOnly: true },
+  { to: '/connectors', label: '数据源管理', icon: Cable, adminOnly: true },
+  { to: '/traces', label: '检索监控', icon: Activity, adminOnly: true },
   { to: '/audit-events', label: '操作审计', icon: ShieldCheck, adminOnly: true },
 ]
 

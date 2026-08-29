@@ -1,6 +1,5 @@
 package dev.infinityknowledge.controlplane.config;
 
-import dev.infinityknowledge.ingestion.parser.DocumentParserRegistry;
 import dev.infinityknowledge.spi.objectstorage.ObjectStorage;
 import dev.infinityknowledge.spi.objectstorage.SourceObjectCatalog;
 import dev.infinityknowledge.store.minio.MinioObjectStorage;
@@ -11,17 +10,15 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-/** Wires rich-document parsers, MinIO and the transactional source-object catalog. */
+/**
+ * 组装 MinIO 原件存储与 PostgreSQL 原件目录。
+ */
 @Configuration
 public class OriginalSourceRuntimeConfiguration {
 
-    /** Registers the deterministic built-in parser registry. */
-    @Bean
-    DocumentParserRegistry documentParserRegistry() {
-        return DocumentParserRegistry.standard();
-    }
-
-    /** Creates the official MinIO client without performing network I/O at startup. */
+    /**
+     * 创建官方 MinIO 客户端；构造阶段不发起网络访问。
+     */
     @Bean
     MinioClient sourceMinioClient(ObjectStorageProperties properties) {
         return MinioClient.builder()
@@ -30,7 +27,9 @@ public class OriginalSourceRuntimeConfiguration {
                 .build();
     }
 
-    /** Registers tenant-isolated original object storage. */
+    /**
+     * 注册按租户与空间隔离的原件对象存储。
+     */
     @Bean
     ObjectStorage objectStorage(
             MinioClient sourceMinioClient,
@@ -46,7 +45,9 @@ public class OriginalSourceRuntimeConfiguration {
         );
     }
 
-    /** Registers active-revision source-object lookup. */
+    /**
+     * 注册活动修订原件目录查询适配器。
+     */
     @Bean
     SourceObjectCatalog sourceObjectCatalog(JdbcTemplate jdbc) {
         return new PostgresSourceObjectCatalog(jdbc);

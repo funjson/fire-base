@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "fixtureType": "RETRIEVAL_EVALUATION_BLUEPRINT",
+  "loaderImplemented": false,
+  "description": "检索评测最小 fixture。runnerCases 的 id/query/expectedDocuments/expectedChunks 对齐 RetrievalEvaluationCase；principal 由运行器或 HTTP JWT 注入。${..._DOCUMENT_ID} 必须替换为摄取响应中的真实 UUID。",
+  "spaces": [
+    {
+      "spaceId": "engineering",
+      "sourceFiles": ["retrieval-engineering.md"]
+    },
+    {
+      "spaceId": "operations",
+      "sourceFiles": ["retrieval-operations.md"]
+    }
+  ],
+  "runnerCases": [
+    {
+      "id": "71000000-0000-4000-8000-000000000001",
+      "category": "EXACT_TERM",
+      "query": {
+        "requestId": "72000000-0000-4000-8000-000000000001",
+        "text": "IKR-RET-042 在 buildEvidenceBundle 阶段表示什么，应该先检查什么？",
+        "spaceIds": ["engineering"],
+        "topK": 8,
+        "filters": {},
+        "retrievalTarget": "保留错误码和接口名，定位活动修订问题",
+        "evidenceRequirements": [],
+        "configurationOverride": {},
+        "purpose": "EVALUATION"
+      },
+      "expectedDocuments": ["${ENGINEERING_DOCUMENT_ID}"],
+      "expectedChunks": []
+    },
+    {
+      "id": "71000000-0000-4000-8000-000000000002",
+      "category": "SPARSE_DENSE",
+      "query": {
+        "requestId": "72000000-0000-4000-8000-000000000002",
+        "text": "登录接口一直卡住，缓存连接都被占满后应先排查哪些原因？",
+        "spaceIds": ["engineering"],
+        "topK": 8,
+        "filters": {},
+        "retrievalTarget": "同时验证关键词与向量召回后的融合结果",
+        "evidenceRequirements": [],
+        "configurationOverride": {},
+        "purpose": "EVALUATION"
+      },
+      "expectedDocuments": ["${ENGINEERING_DOCUMENT_ID}"],
+      "expectedChunks": []
+    },
+    {
+      "id": "71000000-0000-4000-8000-000000000003",
+      "category": "FEEDBACK_OPTIMIZATION",
+      "query": {
+        "requestId": "72000000-0000-4000-8000-000000000003",
+        "text": "认证接口偶发抖动，初轮只找到缓存异常，下一步还应补充哪些排查证据？",
+        "spaceIds": ["engineering"],
+        "topK": 8,
+        "filters": {},
+        "retrievalTarget": "获得认证链路与缓存等待的完整排查证据",
+        "evidenceRequirements": [
+          {
+            "id": "authentication",
+            "description": "认证服务调用超时或错误码证据"
+          },
+          {
+            "id": "cache",
+            "description": "缓存连接获取等待与连接泄漏证据"
+          },
+          {
+            "id": "release",
+            "description": "最近发布变更证据"
+          }
+        ],
+        "configurationOverride": {},
+        "purpose": "EVALUATION"
+      },
+      "expectedDocuments": ["${ENGINEERING_DOCUMENT_ID}"],
+      "expectedChunks": []
+    },
+    {
+      "id": "71000000-0000-4000-8000-000000000004",
+      "category": "CROSS_SPACE",
+      "query": {
+        "requestId": "72000000-0000-4000-8000-000000000004",
+        "text": "OPS-FAILOVER-7 的跨地域故障切换检查项和回退条件是什么？",
+        "spaceIds": ["engineering", "operations"],
+        "topK": 8,
+        "filters": {},
+        "retrievalTarget": "获得切换前检查、切换后探测和回退条件",
+        "evidenceRequirements": [
+          {
+            "id": "precheck",
+            "description": "跨地域切换前检查项"
+          },
+          {
+            "id": "rollback",
+            "description": "关键交易探测失败后的回退条件"
+          }
+        ],
+        "configurationOverride": {},
+        "purpose": "EVALUATION"
+      },
+      "expectedDocuments": ["${OPERATIONS_DOCUMENT_ID}"],
+      "expectedChunks": []
+    }
+  ],
+  "acceptanceOnlyCases": [
+    {
+      "id": "73000000-0000-4000-8000-000000000001",
+      "category": "UNANSWERABLE",
+      "query": {
+        "text": "IKR-NOT-EXISTS-999 的处置流程是什么？",
+        "spaceIds": ["engineering", "operations"],
+        "topK": 8,
+        "testMode": true,
+        "retrievalTarget": "验证没有可信证据时不会伪造答案",
+        "evidenceRequirements": [
+          {
+            "id": "nonexistent-procedure",
+            "description": "IKR-NOT-EXISTS-999 的权威处置流程"
+          }
+        ]
+      },
+      "expected": {
+        "sufficient": false,
+        "allowedTerminalStatus": ["INSUFFICIENT", "CHECK_FAILED", "NOT_EVALUATED"],
+        "forbiddenBehavior": "不得把无 Gold 的在线分数报告为 Recall、MRR 或 nDCG"
+      },
+      "runnerCompatibility": "当前 RetrievalEvaluationCase 要求 expectedDocuments 或 expectedChunks 至少一个非空，因此本 Case 只能通过知识查询 API 验收，不能直接交给 RetrievalEvaluationRunner。"
+    }
+  ]
+}

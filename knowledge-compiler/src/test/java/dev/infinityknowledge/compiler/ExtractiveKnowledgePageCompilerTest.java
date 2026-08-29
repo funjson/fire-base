@@ -1,5 +1,6 @@
 package dev.infinityknowledge.compiler;
 
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.identity.TenantId;
@@ -69,16 +70,19 @@ class ExtractiveKnowledgePageCompilerTest {
             int ordinal,
             String content
     ) {
+        UUID elementId = UUID.randomUUID();
         return new KnowledgeChunk(
                 UUID.randomUUID(),
                 tenantId,
                 spaceId,
                 new DocumentId(UUID.randomUUID()),
                 UUID.randomUUID(),
-                List.of(UUID.randomUUID()),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 ordinal,
                 List.of("架构", "依赖"),
                 content,
+                "架构 / 依赖\n\n" + content,
                 "hash-" + ordinal,
                 Map.of()
         );

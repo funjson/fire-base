@@ -41,6 +41,8 @@
 
 ## 后果
 
-- 修改 Embedding、Parser 或 Chunker 配置时，必须创建和回填新的 generation。
+- 正式修改 Embedding、Parser 或 Chunker 处理契约时，必须用新 `spaceId` 创建 Space 并重新
+  摄取；旧 Space 的固化配置和索引保持不变。generation 继续隔离投影实现与部署契约，
+  但不作为原 Space 内的配置提升或用户可编辑状态机。
 - 多存储之间不使用分布式事务；外部投影失败必须保留可观察状态并支持重试。
 - 超大租户或有物理隔离要求的租户，后续可通过同一 SPI 迁移到独立数据库或独立 Collection。

@@ -1,5 +1,6 @@
 package dev.infinityknowledge.compiler;
 
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.identity.TenantId;
@@ -72,10 +73,14 @@ class GenerativeKnowledgePageCompilerTest {
         KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
         DocumentId documentId = DocumentId.random();
         UUID revisionId = UUID.randomUUID();
+        UUID elementId = UUID.randomUUID();
+        String content = "Supported fact.";
         KnowledgeChunk chunk = new KnowledgeChunk(
                 UUID.randomUUID(), tenantId, spaceId, documentId, revisionId,
-                List.of(UUID.randomUUID()), 0, List.of("Architecture"),
-                "Supported fact.", "content-hash", Map.of()
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
+                0, List.of("Architecture"), content,
+                "Architecture\n\n" + content, "content-hash", Map.of()
         );
         return new Fixture(
                 chunk.id().toString(),

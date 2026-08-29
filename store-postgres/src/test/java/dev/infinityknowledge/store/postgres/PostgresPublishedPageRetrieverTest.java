@@ -27,7 +27,7 @@ class PostgresPublishedPageRetrieverTest {
         NamedParameterJdbcTemplate jdbc = mock(NamedParameterJdbcTemplate.class);
         PostgresPublishedPageRetriever retriever = new PostgresPublishedPageRetriever(jdbc);
         TenantId tenantId = new TenantId("tenant-a");
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 new PrincipalContext(
                         tenantId,

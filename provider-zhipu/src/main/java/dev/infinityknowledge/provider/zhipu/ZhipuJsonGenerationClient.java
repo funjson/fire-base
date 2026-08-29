@@ -14,10 +14,9 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Minimal GLM JSON-mode client shared by source-backed graph and Wiki compilation.
+ * 为知识图谱、Wiki 编译和查询规划提供最小 GLM JSON 模式客户端。
  *
- * <p>The client deliberately exposes only a system instruction and a bounded governed input.
- * Provider-specific response types do not cross the adapter boundary.</p>
+ * <p>客户端只暴露系统约束和受预算治理的输入，厂商响应类型不会穿透 Adapter 边界。</p>
  */
 public final class ZhipuJsonGenerationClient {
     private final ZhipuGenerationConfig config;
@@ -37,7 +36,9 @@ public final class ZhipuJsonGenerationClient {
         this.sleeper = Objects.requireNonNull(sleeper, "sleeper must not be null");
     }
 
-    /** Sends one bounded JSON-mode request and returns the parsed assistant content. */
+    /**
+     * 发送一次有界 JSON 模式请求并解析助手返回内容。
+     */
     public JsonNode generate(String instruction, String input) {
         instruction = requireText(instruction, "instruction", 32_000);
         input = requireText(input, "input", config.maxInputCharacters());
@@ -76,7 +77,9 @@ public final class ZhipuJsonGenerationClient {
         throw new GenerationProviderException("Zhipu generation retry budget exhausted");
     }
 
-    /** Returns the configured source budget so compilers can create bounded batches. */
+    /**
+     * 返回输入字符预算，供上层在调用前构建有界批次。
+     */
     public int maximumInputCharacters() {
         return config.maxInputCharacters();
     }

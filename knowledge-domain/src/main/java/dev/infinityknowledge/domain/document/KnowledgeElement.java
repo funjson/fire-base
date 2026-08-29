@@ -14,7 +14,7 @@ import java.util.UUID;
  * @param revisionId 修订标识
  * @param parentId 父元素标识，根元素为 {@code null}
  * @param type 元素类型
- * @param ordinal 同级稳定顺序
+ * @param ordinal 修订内全局稳定顺序，不是同级顺序
  * @param sectionPath 从根标题到当前元素的路径
  * @param content 元素正文
  * @param attributes 解析器产生的非敏感属性
@@ -47,4 +47,3 @@ public record KnowledgeElement(
         attributes = Map.copyOf(Objects.requireNonNull(attributes, "attributes must not be null"));
     }
 }
-

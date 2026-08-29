@@ -16,8 +16,11 @@ class IngestionPropertiesTest {
     @Test
     void acceptsConfiguredSchemesCaseInsensitively() {
         var properties = new IngestionProperties(
+                "UTF8_BYTE_BUDGET",
+                128,
                 512,
                 1_024,
+                32,
                 List.of("HTTPS", "obsidian", "confluence")
         );
 
@@ -29,8 +32,11 @@ class IngestionPropertiesTest {
     @Test
     void rejectsRelativeMalformedAndUnknownSources() {
         var properties = new IngestionProperties(
+                "UTF8_BYTE_BUDGET",
+                128,
                 512,
                 1_024,
+                32,
                 List.of("https")
         );
 
@@ -46,8 +52,11 @@ class IngestionPropertiesTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new IngestionProperties(
+                        "UTF8_BYTE_BUDGET",
+                        128,
                         512,
                         1_024,
+                        32,
                         List.of("https", "not a scheme")
                 )
         );

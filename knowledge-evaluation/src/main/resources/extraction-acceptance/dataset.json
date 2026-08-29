@@ -1,0 +1,104 @@
+{
+  "datasetVersion": "extraction-artifact-provenance-v4",
+  "cases": [
+    {
+      "id": "markdown-enterprise-structures",
+      "description": "覆盖中英文段落、Front Matter、标题、列表、表格、代码及长段落边界",
+      "sourceResource": "sources/markdown-enterprise.md",
+      "sourceSha256": "fe86fcfba4c1e9ffa933f03aa89f968e821f9b1c211d275925e99bab4073614a",
+      "artifactResource": "sources/markdown-enterprise.md",
+      "artifactSha256": "fe86fcfba4c1e9ffa933f03aa89f968e821f9b1c211d275925e99bab4073614a",
+      "artifactContract": "utf8-line-endings-lf-v1",
+      "license": "INTERNAL-ONLY-SYNTHETIC",
+      "review": {
+        "reviewedBy": "codex-agent:provenance-acceptance-closure",
+        "reviewedAt": "2026-08-22"
+      },
+      "mediaType": "text/markdown",
+      "expectedElements": [
+        {"range": {"startOffset": 4, "endOffset": 39}, "type": "PARAGRAPH", "role": "FRONT_MATTER"},
+        {"range": {"startOffset": 46, "endOffset": 50}, "type": "HEADING", "role": null},
+        {"range": {"startOffset": 52, "endOffset": 87}, "type": "PARAGRAPH", "role": null},
+        {"range": {"startOffset": 89, "endOffset": 177}, "type": "PARAGRAPH", "role": null},
+        {"range": {"startOffset": 182, "endOffset": 186}, "type": "HEADING", "role": null},
+        {"range": {"startOffset": 188, "endOffset": 214}, "type": "LIST", "role": null},
+        {"range": {"startOffset": 216, "endOffset": 279}, "type": "TABLE", "role": null},
+        {"range": {"startOffset": 289, "endOffset": 341}, "type": "CODE", "role": null},
+        {"range": {"startOffset": 350, "endOffset": 355}, "type": "HEADING", "role": null},
+        {"range": {"startOffset": 357, "endOffset": 577}, "type": "PARAGRAPH", "role": null}
+      ],
+      "boundaries": [
+        {
+          "relation": "MUST_JOIN",
+          "left": {"startOffset": 52, "endOffset": 87},
+          "right": {"startOffset": 89, "endOffset": 177}
+        },
+        {
+          "relation": "MUST_BREAK",
+          "left": {"startOffset": 188, "endOffset": 214},
+          "right": {"startOffset": 216, "endOffset": 279}
+        },
+        {
+          "relation": "MUST_BREAK",
+          "left": {"startOffset": 216, "endOffset": 279},
+          "right": {"startOffset": 289, "endOffset": 341}
+        }
+      ],
+      "mustPreserve": [
+        {"startOffset": 46, "endOffset": 50},
+        {"startOffset": 52, "endOffset": 87},
+        {"startOffset": 89, "endOffset": 177},
+        {"startOffset": 182, "endOffset": 186},
+        {"startOffset": 188, "endOffset": 214},
+        {"startOffset": 216, "endOffset": 279},
+        {"startOffset": 289, "endOffset": 341},
+        {"startOffset": 350, "endOffset": 355},
+        {"startOffset": 357, "endOffset": 577}
+      ],
+      "mustRemove": [
+        {"startOffset": 4, "endOffset": 39}
+      ],
+      "hardGates": {
+        "minimumParseSuccessRate": 1.0,
+        "maximumTokenOverflowCount": 0,
+        "maximumInvalidSourceSpanCount": 0,
+        "minimumSourceAccountingRate": 1.0,
+        "maximumSilentTruncationCount": 0
+      }
+    },
+    {
+      "id": "plain-text-paragraphs",
+      "description": "覆盖纯文本 UTF-8、空行段落边界与中英文来源核算",
+      "sourceResource": "sources/plain-text-enterprise.txt",
+      "sourceSha256": "11f075d098343f2364139698d3401a6a6aa3f5719096d6a05cc0cfd71a44ba3e",
+      "artifactResource": "sources/plain-text-enterprise.txt",
+      "artifactSha256": "11f075d098343f2364139698d3401a6a6aa3f5719096d6a05cc0cfd71a44ba3e",
+      "artifactContract": "utf8-line-endings-lf-v1",
+      "license": "INTERNAL-ONLY-SYNTHETIC",
+      "review": {
+        "reviewedBy": "codex-agent:provenance-acceptance-closure",
+        "reviewedAt": "2026-08-22"
+      },
+      "mediaType": "text/plain",
+      "expectedElements": [
+        {"range": {"startOffset": 0, "endOffset": 8}, "type": "PARAGRAPH", "role": null},
+        {"range": {"startOffset": 10, "endOffset": 46}, "type": "PARAGRAPH", "role": null},
+        {"range": {"startOffset": 48, "endOffset": 62}, "type": "PARAGRAPH", "role": null}
+      ],
+      "boundaries": [],
+      "mustPreserve": [
+        {"startOffset": 0, "endOffset": 8},
+        {"startOffset": 10, "endOffset": 46},
+        {"startOffset": 48, "endOffset": 62}
+      ],
+      "mustRemove": [],
+      "hardGates": {
+        "minimumParseSuccessRate": 1.0,
+        "maximumTokenOverflowCount": 0,
+        "maximumInvalidSourceSpanCount": 0,
+        "minimumSourceAccountingRate": 1.0,
+        "maximumSilentTruncationCount": 0
+      }
+    }
+  ]
+}

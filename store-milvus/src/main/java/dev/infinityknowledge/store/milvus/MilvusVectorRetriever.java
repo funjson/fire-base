@@ -5,6 +5,7 @@ import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import dev.infinityknowledge.spi.embedding.EmbeddingProvider;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
+import dev.infinityknowledge.spi.retrieval.RetrievalComponentVersion;
 import dev.infinityknowledge.spi.retrieval.Retriever;
 import dev.infinityknowledge.spi.vector.VectorIndex;
 import dev.infinityknowledge.spi.vector.VectorSearchRequest;
@@ -46,6 +47,17 @@ public final class MilvusVectorRetriever implements Retriever {
     @Override
     public RetrievalChannel channel() {
         return RetrievalChannel.VECTOR;
+    }
+
+    /** 返回向量后端、实际 Embedding 合同和索引代际协议版本。 */
+    @Override
+    public RetrievalComponentVersion componentVersion() {
+        return new RetrievalComponentVersion(
+                "retriever-vector",
+                "milvus",
+                embeddingSpec.providerId() + ":" + embeddingSpec.modelId(),
+                generation
+        );
     }
 
     @Override

@@ -28,5 +28,20 @@ $env:E2E_BROWSER_CHANNEL = 'chrome'
 npm.cmd run e2e
 ```
 
-The 2026-08-11 controlled acceptance used this Chrome channel with one worker and passed
-both serial Admin and Reader scenarios.
+The current suite contains eight serial scenarios: the governed Admin journey, immutable
+Space creation, ACL-scoped Reader access, multi-file TEST_ONLY extraction, request-level
+test configuration, exact Tokenizer selection, cancellation, and formal ingestion
+identity protection. These scenarios create real Spaces, runs and source objects; run
+them only in a dedicated acceptance environment.
+
+The immutable Space scenario also verifies that the create request cannot submit an
+implementation contract, the server-generated Pipeline/Normalizer/Parser/Cleaner/
+Chunker-Tokenizer contract is complete, an idempotent duplicate `POST` keeps that contract
+unchanged, the server reports whether the current deployment still matches it, and the
+removed configuration `PUT` remains `405`. Run details must expose the
+same processing contract plus the source normalizer used by that run, so Baseline and test
+configuration comparisons include implementation drift rather than only IDs and parameters.
+
+The 2026-08-11 controlled acceptance used this Chrome channel with one worker. Its
+historical result predates the immutable Space-creation scenario, so use a fresh
+`npm run e2e` result when accepting the current contract.

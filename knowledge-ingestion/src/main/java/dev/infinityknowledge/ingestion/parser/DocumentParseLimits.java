@@ -1,15 +1,15 @@
 package dev.infinityknowledge.ingestion.parser;
 
 /**
- * Resource budgets applied before and during rich-document parsing.
+ * 富文档解析前与解析过程中共同执行的资源预算。
  *
- * @param maximumSourceBytes maximum compressed/source byte count
- * @param maximumExpandedBytes maximum cumulative uncompressed archive bytes
- * @param maximumPages maximum PDF page count
- * @param maximumElements maximum emitted structural elements
- * @param maximumTextCharacters maximum emitted text characters
- * @param maximumArchiveEntries maximum entries in an Office archive
- * @param maximumCompressionRatio maximum accepted expanded/compressed entry ratio
+ * @param maximumSourceBytes 压缩文件或原始来源的最大字节数
+ * @param maximumExpandedBytes 归档文件累计解压后的最大字节数
+ * @param maximumPages PDF 最大页数
+ * @param maximumElements 最多允许产出的结构元素数量
+ * @param maximumTextCharacters 最多允许产出的文本字符数
+ * @param maximumArchiveEntries Office 归档文件最大条目数
+ * @param maximumCompressionRatio 允许的最大解压缩比
  */
 public record DocumentParseLimits(
         int maximumSourceBytes,
@@ -21,7 +21,7 @@ public record DocumentParseLimits(
         int maximumCompressionRatio
 ) {
 
-    /** Validates all parsing budgets. */
+    /** 校验所有解析预算均为安全的正值。 */
     public DocumentParseLimits {
         if (maximumSourceBytes < 1) {
             throw new IllegalArgumentException("maximumSourceBytes must be positive");
@@ -35,7 +35,7 @@ public record DocumentParseLimits(
         }
     }
 
-    /** Conservative enterprise defaults suitable for synchronous ingestion workers. */
+    /** 返回适合同步摄取 Worker 的保守企业默认值。 */
     public static DocumentParseLimits defaults() {
         return new DocumentParseLimits(
                 25 * 1_024 * 1_024,

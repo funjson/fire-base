@@ -6,13 +6,13 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Bounded immutable input passed to exactly one selected document parser.
+ * 传递给唯一已选 Parser 的有界、不可变输入。
  *
- * @param revisionId target immutable document revision
- * @param mediaType normalized media type without parameters
- * @param fileName original file name used only for parser selection and metadata
- * @param sourceBytes already bounded source bytes
- * @param limits parsing budgets
+ * @param revisionId 目标不可变文档修订
+ * @param mediaType 已去除参数的规范媒体类型
+ * @param fileName 仅用于选择 Parser 和记录元数据的原始文件名
+ * @param sourceBytes 已通过大小约束的来源字节
+ * @param limits 解析资源预算
  */
 public record DocumentParseInput(
         UUID revisionId,
@@ -22,7 +22,7 @@ public record DocumentParseInput(
         DocumentParseLimits limits
 ) {
 
-    /** Defensively copies source bytes and rejects incomplete requests. */
+    /** 防御性复制来源字节，并拒绝不完整请求。 */
     public DocumentParseInput {
         Objects.requireNonNull(revisionId, "revisionId must not be null");
         Objects.requireNonNull(mediaType, "mediaType must not be null");
@@ -34,12 +34,12 @@ public record DocumentParseInput(
         }
     }
 
-    /** Returns a new stream over the immutable bounded source. */
+    /** 为不可变、有界来源创建新的读取流。 */
     public InputStream openStream() {
         return new ByteArrayInputStream(sourceBytes);
     }
 
-    /** Returns a defensive copy for libraries that require a byte array. */
+    /** 为必须接收字节数组的解析库返回防御性副本。 */
     @Override
     public byte[] sourceBytes() {
         return sourceBytes.clone();

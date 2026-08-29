@@ -1,9 +1,11 @@
 package dev.infinityknowledge.controlplane.config;
 
-import dev.infinityknowledge.controlplane.application.TrackedKeywordProjectionExecutor;
+import dev.infinityknowledge.controlplane.application.projection.TrackedKeywordProjectionExecutor;
+import dev.infinityknowledge.controlplane.config.ingestion.SpaceIndexingContractResolver;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import dev.infinityknowledge.spi.indexing.IndexProjectionStore;
+import dev.infinityknowledge.spi.indexing.IndexPhysicalContract;
 import dev.infinityknowledge.spi.indexing.ProjectionExecutor;
 import dev.infinityknowledge.store.elasticsearch.ElasticsearchConfig;
 import dev.infinityknowledge.store.elasticsearch.ElasticsearchKeywordIndex;
@@ -19,7 +21,7 @@ import java.time.Clock;
 import java.util.Base64;
 
 /**
- * Wires the optional Elasticsearch keyword projection and retrieval channel.
+ * 装配可选的 Elasticsearch 关键词投影与检索通道。
  */
 @Configuration
 @ConditionalOnProperty(
@@ -30,7 +32,7 @@ import java.util.Base64;
 public class ElasticsearchRuntimeConfiguration {
 
     /**
-     * Creates the isolated Elasticsearch HTTP client.
+     * 创建隔离的 Elasticsearch HTTP 客户端。
      */
     @Bean
     HttpClient elasticsearchHttpClient(ElasticsearchProperties properties) {
@@ -40,7 +42,7 @@ public class ElasticsearchRuntimeConfiguration {
     }
 
     /**
-     * Creates the shared read/write adapter.
+     * 创建读写共用的 Elasticsearch Adapter。
      */
     @Bean
     ElasticsearchKeywordIndex elasticsearchKeywordIndex(
@@ -62,13 +64,29 @@ public class ElasticsearchRuntimeConfiguration {
     }
 
     /**
-     * Adds tracked, retryable keyword projection to the generic worker.
+     * 将 Elasticsearch 实际索引名与映射纳入所有投影和检索共用的物理合同。
+     */
+    @Bean
+    IndexPhysicalContract elasticsearchIndexPhysicalContract(
+            EmbeddingProperties embeddingProperties,
+            ElasticsearchKeywordIndex keywordIndex
+    ) {
+        return IndexPhysicalContract.withKeywordTarget(
+                embeddingProperties.generation(),
+                keywordIndex.physicalTargetFingerprint()
+        );
+    }
+
+    /**
+     * 将可跟踪、可重试的关键词投影接入通用 Worker。
      */
     @Bean
     ProjectionExecutor keywordProjectionExecutor(
             ElasticsearchKeywordIndex keywordIndex,
             IndexProjectionStore projectionStore,
             EmbeddingProperties embeddingProperties,
+            IndexPhysicalContract physicalContract,
+            SpaceIndexingContractResolver indexingContractResolver,
             Clock clock
     ) {
         return new TrackedKeywordProjectionExecutor(
@@ -79,7 +97,8 @@ public class ElasticsearchRuntimeConfiguration {
                         embeddingProperties.model(),
                         embeddingProperties.dimensions()
                 ),
-                embeddingProperties.generation(),
+                physicalContract,
+                indexingContractResolver,
                 clock
         );
     }

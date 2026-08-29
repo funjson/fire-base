@@ -8,6 +8,7 @@ import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
 import dev.infinityknowledge.spi.indexing.ProjectionStatus;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
+import dev.infinityknowledge.spi.indexing.IndexPhysicalContract;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -101,7 +102,7 @@ class PostgresActiveRevisionGuardIT {
                 tenantId,
                 spaceId,
                 new EmbeddingSpec("test", "model", 4),
-                "generation-a",
+                IndexPhysicalContract.baseline("generation-a"),
                 "normalizer-a",
                 "chunker-a",
                 now

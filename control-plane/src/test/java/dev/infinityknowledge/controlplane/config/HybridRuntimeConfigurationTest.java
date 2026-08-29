@@ -96,6 +96,7 @@ class HybridRuntimeConfigurationTest {
 
     private static EmbeddingProperties embedding(String apiKey) {
         return new EmbeddingProperties(
+                true,
                 "zhipu",
                 "embedding-3",
                 2_048,

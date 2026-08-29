@@ -43,6 +43,7 @@ public final class PostgresConnectorStateStore implements ConnectorStateStore {
                 new LinkedHashMap<>(registration.configuration());
         persistedConfiguration.put("authority", registration.authority());
         OffsetDateTime occurredAt = databaseTime(registration.occurredAt());
+        // Connector ID 是稳定来源身份；配置更新不得把既有来源迁移到其他 Space 或改成其他类型。
         int affected = jdbc.update("""
                 INSERT INTO connector_instance
                     (tenant_id, id, space_id, connector_type, display_name,
@@ -51,13 +52,13 @@ public final class PostgresConnectorStateStore implements ConnectorStateStore {
                   FROM knowledge_space s
                  WHERE s.tenant_id = ? AND s.id = ? AND s.status = 'ACTIVE'
                 ON CONFLICT (tenant_id, id) DO UPDATE
-                SET space_id = EXCLUDED.space_id,
-                    connector_type = EXCLUDED.connector_type,
-                    display_name = EXCLUDED.display_name,
+                SET display_name = EXCLUDED.display_name,
                     config_json = EXCLUDED.config_json,
                     status = 'ACTIVE',
                     version = connector_instance.version + 1,
                     updated_at = EXCLUDED.updated_at
+                WHERE connector_instance.space_id = EXCLUDED.space_id
+                  AND connector_instance.connector_type = EXCLUDED.connector_type
                 """,
                 registration.tenantId().value(),
                 registration.connectorId(),

@@ -10,33 +10,50 @@ import java.util.regex.Pattern;
 /**
  * 绑定知识切分预算，避免摄取服务中出现不可调整的生产参数。
  *
- * @param targetChunkCharacters 常规知识块目标字符数
- * @param maximumChunkCharacters 单个知识块最大字符数
+ * @param tokenizerId 默认 Token Counter 稳定标识
+ * @param minimumChunkTokens 常规知识块最小预算
+ * @param targetChunkTokens 常规知识块目标预算
+ * @param maximumChunkTokens 单个知识块最大预算
+ * @param overlapChunkTokens 相邻知识块重叠预算
  * @param allowedSourceSchemes 可审计来源 URI 的协议白名单
  */
 @ConfigurationProperties(prefix = "infinity.knowledge.ingestion")
 public record IngestionProperties(
-        int targetChunkCharacters,
-        int maximumChunkCharacters,
+        String tokenizerId,
+        int minimumChunkTokens,
+        int targetChunkTokens,
+        int maximumChunkTokens,
+        int overlapChunkTokens,
         List<String> allowedSourceSchemes
 ) {
     private static final Pattern URI_SCHEME = Pattern.compile(
             "[a-z][a-z0-9+.-]*"
     );
+    private static final Pattern TOKEN_COUNTER_ID = Pattern.compile(
+            "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
+    );
 
     /**
-     * 校验切分参数。
+     * 校验部署默认切分参数。
      */
     public IngestionProperties {
-        if (targetChunkCharacters < 128 || targetChunkCharacters > 20_000) {
+        tokenizerId = tokenizerId == null ? "" : tokenizerId.strip();
+        if (!TOKEN_COUNTER_ID.matcher(tokenizerId).matches()) {
             throw new IllegalArgumentException(
-                    "targetChunkCharacters must be between 128 and 20000"
+                    "tokenizerId has invalid format"
             );
         }
-        if (maximumChunkCharacters < targetChunkCharacters
-                || maximumChunkCharacters > 50_000) {
+        if (minimumChunkTokens < 1 || minimumChunkTokens > targetChunkTokens
+                || targetChunkTokens > maximumChunkTokens
+                || maximumChunkTokens > 65_536) {
             throw new IllegalArgumentException(
-                    "maximumChunkCharacters must be between target and 50000"
+                    "chunk token budgets must satisfy 1 <= minimum <= target "
+                            + "<= maximum <= 65536"
+            );
+        }
+        if (overlapChunkTokens < 0 || overlapChunkTokens >= minimumChunkTokens) {
+            throw new IllegalArgumentException(
+                    "overlapChunkTokens must be non-negative and less than minimum"
             );
         }
         allowedSourceSchemes = allowedSourceSchemes == null

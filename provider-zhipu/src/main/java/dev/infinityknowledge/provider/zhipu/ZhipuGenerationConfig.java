@@ -7,16 +7,16 @@ import java.time.Duration;
 import java.util.Objects;
 
 /**
- * Bounded configuration for structured GLM knowledge compilation calls.
+ * 定义结构化 GLM 调用的网络、重试和输入输出预算。
  *
- * @param endpoint complete chat-completions endpoint
- * @param apiKey provider credential
- * @param model model identifier
- * @param requestTimeout per-attempt network timeout
- * @param maxAttempts bounded retry attempts including the first call
- * @param initialBackoff first retry delay
- * @param maxInputCharacters maximum governed source characters sent in one request
- * @param maxOutputTokens maximum model output budget
+ * @param endpoint 完整 Chat Completions 端点
+ * @param apiKey Provider 凭据
+ * @param model 模型标识
+ * @param requestTimeout 单次网络请求超时
+ * @param maxAttempts 包含首次调用的最大尝试次数
+ * @param initialBackoff 首次重试等待时间
+ * @param maxInputCharacters 单次请求允许发送的最大输入字符数
+ * @param maxOutputTokens 模型最大输出 Token 预算
  */
 public record ZhipuGenerationConfig(
         URI endpoint,
@@ -29,7 +29,9 @@ public record ZhipuGenerationConfig(
         int maxOutputTokens
 ) {
 
-    /** Validates network, credential and request-budget settings. */
+    /**
+     * 校验网络、凭据和请求预算配置。
+     */
     public ZhipuGenerationConfig {
         Objects.requireNonNull(endpoint, "endpoint must not be null");
         if (!"https".equalsIgnoreCase(endpoint.getScheme())

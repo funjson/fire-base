@@ -1,6 +1,7 @@
 package dev.infinityknowledge.store.elasticsearch;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.document.KnowledgeDocument;
@@ -252,7 +253,7 @@ class ElasticsearchKeywordIndexIT {
                 Set.of("engineering"),
                 false
         );
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal,
                 text,
@@ -325,6 +326,7 @@ class ElasticsearchKeywordIndexIT {
                 Instant.now(),
                 Instant.now()
         );
+        UUID elementId = UUID.nameUUIDFromBytes(content.getBytes(StandardCharsets.UTF_8));
         KnowledgeChunk chunk = new KnowledgeChunk(
                 UUID.nameUUIDFromBytes(
                         (revisionId + ":0").getBytes(StandardCharsets.UTF_8)
@@ -333,10 +335,12 @@ class ElasticsearchKeywordIndexIT {
                 spaceId,
                 documentId,
                 revisionId,
-                List.of(UUID.nameUUIDFromBytes(content.getBytes(StandardCharsets.UTF_8))),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of("故障排查"),
                 content,
+                "故障排查\n\n" + content,
                 "hash-" + externalId,
                 Map.of("language", "zh-CN")
         );

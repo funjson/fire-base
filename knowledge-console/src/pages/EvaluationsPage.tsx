@@ -22,6 +22,7 @@ import {
   Panel,
   StatusBadge,
 } from '../components/State'
+import { EvaluationWorkspaceNav } from '../components/evaluation/EvaluationWorkspaceNav'
 import type {
   EvaluationCaseInput,
   EvaluationRun,
@@ -117,6 +118,7 @@ export function EvaluationsPage() {
 
   return (
     <div className="page-stack">
+      <EvaluationWorkspaceNav />
       <div className="page-intro">
         <div>
           <span className="eyebrow">QUALITY ENGINEERING</span>

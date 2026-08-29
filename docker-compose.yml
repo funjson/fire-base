@@ -124,6 +124,29 @@ services:
     volumes:
       - milvus-minio-data:/minio_data
 
+  docling:
+    # Docling Java 0.5.3 已针对 Serve v1.20.0 验证；摘要同时进入 Parser 部署合同。
+    # 该服务只在抽取验收时启动，避免普通开发无意加载大模型与长期占用内存。
+    image: ghcr.io/docling-project/docling-serve-cpu:v1.20.0@sha256:419967009a6b507bf25380132335cf8b354e6ce9df4d40f46a612de2e9ddcb88
+    container_name: infinity-knowledge-docling
+    profiles:
+      - extraction-acceptance
+    ports:
+      - "5001:5001"
+    environment:
+      TZ: UTC
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - http://localhost:5001/ready
+      interval: 10s
+      start_period: 5m
+      timeout: 5s
+      retries: 60
+
   milvus:
     image: milvusdb/milvus:v2.6.19
     container_name: infinity-knowledge-milvus

@@ -1,5 +1,6 @@
 package dev.infinityknowledge.ingestion.parser;
 
+import dev.infinityknowledge.domain.document.ElementProvenance;
 import dev.infinityknowledge.domain.document.ElementType;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -9,11 +10,11 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 
-/** Bounded PDF text parser that retains page provenance for every emitted element. */
+/** 受资源预算约束，并为每个元素保留页级来源信息的 PDF Parser。 */
 public final class PdfDocumentParser implements DocumentParser {
 
-    /** Current parser contract version. */
-    public static final String VERSION = "pdfbox-page-v1";
+    /** 当前 Parser 契约版本。 */
+    public static final String VERSION = "pdfbox-page-v2";
 
     @Override
     public String id() {
@@ -26,6 +27,11 @@ public final class PdfDocumentParser implements DocumentParser {
     }
 
     @Override
+    public String canonicalMediaType() {
+        return "application/pdf";
+    }
+
+    @Override
     public Set<String> supportedMediaTypes() {
         return Set.of("application/pdf");
     }
@@ -33,6 +39,15 @@ public final class PdfDocumentParser implements DocumentParser {
     @Override
     public Set<String> supportedExtensions() {
         return Set.of(".pdf");
+    }
+
+    /** PDFBox 按页提取正文，并在每个页面元素上保留一基页码。 */
+    @Override
+    public Set<ParserOutputCapability> outputCapabilities() {
+        return Set.of(
+                ParserOutputCapability.STANDARD_ELEMENTS,
+                ParserOutputCapability.PAGE_NUMBER
+        );
     }
 
     @Override
@@ -58,7 +73,10 @@ public final class PdfDocumentParser implements DocumentParser {
                 elements.add(
                         ElementType.PARAGRAPH,
                         stripper.getText(document),
-                        Map.of("page", Integer.toString(page))
+                        Map.of(
+                                ElementProvenance.PAGE_NUMBER_ATTRIBUTE,
+                                Integer.toString(page)
+                        )
                 );
             }
             return new ParsedDocument(

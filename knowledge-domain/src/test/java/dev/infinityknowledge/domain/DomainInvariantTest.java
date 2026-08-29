@@ -1,11 +1,14 @@
 package dev.infinityknowledge.domain;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
+import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.evidence.Citation;
 import dev.infinityknowledge.domain.evidence.Evidence;
 import dev.infinityknowledge.domain.identity.PrincipalContext;
 import dev.infinityknowledge.domain.identity.PrincipalId;
 import dev.infinityknowledge.domain.identity.TenantId;
+import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.domain.retrieval.KnowledgeQuery;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
 import org.junit.jupiter.api.Test;
@@ -30,7 +33,7 @@ class DomainInvariantTest {
     @Test
     void rejectsUnboundedTopK() {
         PrincipalContext principal = principal("tenant-a");
-        assertThrows(IllegalArgumentException.class, () -> new KnowledgeQuery(
+        assertThrows(IllegalArgumentException.class, () -> KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal,
                 "如何处理订单超时",
@@ -47,7 +50,7 @@ class DomainInvariantTest {
     void rejectsUnknownRetrievalFilters() {
         PrincipalContext principal = principal("tenant-a");
 
-        assertThrows(IllegalArgumentException.class, () -> new KnowledgeQuery(
+        assertThrows(IllegalArgumentException.class, () -> KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal,
                 "如何处理订单超时",
@@ -66,7 +69,7 @@ class DomainInvariantTest {
         Map<String, String> filters = new HashMap<>();
         filters.put(null, "zh-CN");
 
-        assertThrows(IllegalArgumentException.class, () -> new KnowledgeQuery(
+        assertThrows(IllegalArgumentException.class, () -> KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal,
                 "如何处理订单超时",
@@ -105,6 +108,113 @@ class DomainInvariantTest {
     @Test
     void normalizesTenantId() {
         assertEquals("tenant-a", new TenantId(" tenant-a ").value());
+    }
+
+    /**
+     * Chunk 正文不能在领域构造时再次裁剪，否则内容哈希和 SourceSpan 会指向另一份文本。
+     */
+    @Test
+    void preservesChunkTextExactly() {
+        UUID elementId = UUID.randomUUID();
+        String content = " 前导与尾随空白。\n";
+        String contextualText = "章节\n\n" + content;
+
+        KnowledgeChunk chunk = new KnowledgeChunk(
+                UUID.randomUUID(),
+                new TenantId("tenant-a"),
+                new KnowledgeSpaceId("space-a"),
+                DocumentId.random(),
+                UUID.randomUUID(),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
+                0,
+                List.of("章节"),
+                content,
+                contextualText,
+                "content-hash",
+                Map.of()
+        );
+
+        assertEquals(content, chunk.content());
+        assertEquals(contextualText, chunk.contextualText());
+    }
+
+    /**
+     * Chunk 必须保留可用于引用和高亮的原文范围。
+     */
+    @Test
+    void rejectsMissingChunkSourceSpans() {
+        UUID elementId = UUID.randomUUID();
+
+        assertThrows(IllegalArgumentException.class, () -> chunk(
+                List.of(elementId),
+                List.of()
+        ));
+    }
+
+    /**
+     * Chunk 声明的来源元素必须与实际引用的元素完全一致。
+     */
+    @Test
+    void rejectsChunkSourceSpansThatDoNotMatchElements() {
+        UUID declaredElement = UUID.randomUUID();
+        UUID undeclaredElement = UUID.randomUUID();
+
+        assertThrows(IllegalArgumentException.class, () -> chunk(
+                List.of(declaredElement),
+                List.of(new ChunkSourceSpan(undeclaredElement, 0, 1, null))
+        ));
+        assertThrows(IllegalArgumentException.class, () -> chunk(
+                List.of(declaredElement, undeclaredElement),
+                List.of(new ChunkSourceSpan(declaredElement, 0, 1, null))
+        ));
+    }
+
+    /**
+     * 元素标识是 Chunk 来源集合，重复值只会制造虚假的来源数量。
+     */
+    @Test
+    void rejectsDuplicateChunkElementIds() {
+        UUID elementId = UUID.randomUUID();
+
+        assertThrows(IllegalArgumentException.class, () -> chunk(
+                List.of(elementId, elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, 1, null))
+        ));
+    }
+
+    /**
+     * 限制单个 Chunk 的来源范围数量，避免无界引用元数据进入投影。
+     */
+    @Test
+    void rejectsTooManyChunkSourceSpans() {
+        UUID elementId = UUID.randomUUID();
+        List<ChunkSourceSpan> spans = java.util.stream.IntStream.range(0, 129)
+                .mapToObj(index -> new ChunkSourceSpan(elementId, index, index + 1, null))
+                .toList();
+
+        assertThrows(IllegalArgumentException.class, () -> chunk(
+                List.of(elementId),
+                spans
+        ));
+    }
+
+    private KnowledgeChunk chunk(List<UUID> elementIds, List<ChunkSourceSpan> sourceSpans) {
+        return new KnowledgeChunk(
+                UUID.randomUUID(),
+                new TenantId("tenant-a"),
+                new KnowledgeSpaceId("space-a"),
+                DocumentId.random(),
+                UUID.randomUUID(),
+                elementIds,
+                sourceSpans,
+                0,
+                List.of(),
+                "正文",
+                "正文",
+                "content-hash",
+                Map.of()
+        );
     }
 
     /**

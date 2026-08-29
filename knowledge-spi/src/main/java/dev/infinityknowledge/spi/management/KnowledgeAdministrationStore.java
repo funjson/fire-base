@@ -21,6 +21,9 @@ public interface KnowledgeAdministrationStore {
 
     DocumentPage documents(TenantId tenantId, DocumentFilter filter);
 
+    /** 按租户和文档标识读取独立详情页所需的摘要。 */
+    Optional<Document> document(TenantId tenantId, UUID documentId);
+
     List<Chunk> chunks(TenantId tenantId, UUID documentId);
 
     List<Revision> revisions(TenantId tenantId, UUID documentId);
@@ -36,6 +39,14 @@ public interface KnowledgeAdministrationStore {
     record DocumentFilter(
             String spaceId,
             String status,
+            String title,
+            String source,
+            String keywordStatus,
+            String vectorStatus,
+            Integer minimumChunkCount,
+            Integer maximumChunkCount,
+            Instant updatedFrom,
+            Instant updatedTo,
             int limit,
             int offset
     ) {
@@ -60,6 +71,7 @@ public interface KnowledgeAdministrationStore {
             String status,
             long version,
             long documentCount,
+            Instant createdAt,
             Instant updatedAt
     ) {
     }

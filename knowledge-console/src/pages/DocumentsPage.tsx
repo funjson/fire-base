@@ -1,19 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
-  Archive,
   ChevronLeft,
   ChevronRight,
-  Download,
-  Eye,
   FileText,
-  Plus,
-  RefreshCw,
+  Filter,
   RotateCcw,
-  Trash2,
   Upload,
-  X,
 } from 'lucide-react'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   EmptyState,
   ErrorState,
@@ -21,134 +16,67 @@ import {
   Panel,
   StatusBadge,
 } from '../components/State'
-import type {
-  Chunk,
-  DocumentRevisionView,
-  DocumentView,
-  MarkdownDocumentInput,
-  ProjectionJob,
-  ProjectionType,
-} from '../lib/api'
 import { useApi } from '../lib/use-api'
 
 const pageSize = 25
 
+type DocumentFilters = {
+  spaceId: string
+  status: string
+  title: string
+  source: string
+  keywordStatus: string
+  vectorStatus: string
+  minimumChunkCount: string
+  maximumChunkCount: string
+  updatedFrom: string
+  updatedTo: string
+}
+
+const emptyFilters: DocumentFilters = {
+  spaceId: '',
+  status: '',
+  title: '',
+  source: '',
+  keywordStatus: '',
+  vectorStatus: '',
+  minimumChunkCount: '',
+  maximumChunkCount: '',
+  updatedFrom: '',
+  updatedTo: '',
+}
+
+/** 文档列表只负责筛选和导航，诊断与生命周期操作由独立详情页承担。 */
 export function DocumentsPage() {
   const api = useApi()
-  const queryClient = useQueryClient()
-  const [spaceId, setSpaceId] = useState('')
-  const [status, setStatus] = useState('')
+  const navigate = useNavigate()
+  const [draftFilters, setDraftFilters] = useState<DocumentFilters>(emptyFilters)
+  const [appliedFilters, setAppliedFilters] =
+    useState<DocumentFilters>(emptyFilters)
+  const [filterError, setFilterError] = useState<string>()
   const [offset, setOffset] = useState(0)
-  const [selected, setSelected] = useState<DocumentView>()
-  const [uploading, setUploading] = useState(false)
-  const [uploadingFile, setUploadingFile] = useState(false)
   const spaces = useQuery({ queryKey: ['spaces'], queryFn: api.spaces })
   const documents = useQuery({
-    queryKey: ['documents', spaceId, status, offset],
+    queryKey: ['documents', appliedFilters, offset],
     queryFn: () =>
       api.documents({
-        spaceId: spaceId || undefined,
-        status: status || undefined,
+        spaceId: optionalText(appliedFilters.spaceId),
+        status: optionalText(appliedFilters.status),
+        title: optionalText(appliedFilters.title),
+        source: optionalText(appliedFilters.source),
+        keywordStatus: optionalText(appliedFilters.keywordStatus),
+        vectorStatus: optionalText(appliedFilters.vectorStatus),
+        minimumChunkCount: optionalNonNegativeInteger(
+          appliedFilters.minimumChunkCount,
+        ),
+        maximumChunkCount: optionalNonNegativeInteger(
+          appliedFilters.maximumChunkCount,
+        ),
+        updatedFrom: localDateTimeToInstant(appliedFilters.updatedFrom),
+        updatedTo: localDateTimeToInstant(appliedFilters.updatedTo),
         limit: pageSize,
         offset,
       }),
-  })
-  const chunks = useQuery({
-    queryKey: ['chunks', selected?.id],
-    queryFn: () => api.chunks(selected!.id),
-    enabled: Boolean(selected),
-  })
-  const originalSource = useQuery({
-    queryKey: ['document-source', selected?.id],
-    queryFn: () => api.sourceMetadata(selected!.id),
-    enabled: Boolean(selected?.originalFileName),
-  })
-  const projections = useQuery({
-    queryKey: ['document-projections', selected?.id],
-    queryFn: () => api.projectionJobs(selected!.id),
-    enabled: Boolean(selected),
-    refetchInterval: (query) =>
-      query.state.data?.some((job) =>
-        ['PENDING', 'RETRY', 'RUNNING'].includes(job.status),
-      )
-        ? 2_000
-        : false,
-  })
-  const retryProjection = useMutation({
-    mutationFn: ({
-      documentId,
-      projectionType,
-    }: {
-      documentId: string
-      projectionType: ProjectionType
-    }) => api.retryProjection(documentId, projectionType),
-    onSuccess: async (_result, variables) => {
-      await queryClient.invalidateQueries({
-        queryKey: ['document-projections', variables.documentId],
-      })
-      await queryClient.invalidateQueries({ queryKey: ['documents'] })
-      await queryClient.invalidateQueries({ queryKey: ['overview'] })
-    },
-  })
-  const upload = useMutation({
-    mutationFn: api.ingestMarkdown,
-    onSuccess: async () => {
-      setUploading(false)
-      setOffset(0)
-      await queryClient.invalidateQueries({ queryKey: ['documents'] })
-      await queryClient.invalidateQueries({ queryKey: ['overview'] })
-    },
-  })
-  const fileUpload = useMutation({
-    mutationFn: api.ingestFile,
-    onSuccess: async () => {
-      setUploadingFile(false)
-      setOffset(0)
-      await queryClient.invalidateQueries({ queryKey: ['documents'] })
-      await queryClient.invalidateQueries({ queryKey: ['overview'] })
-    },
-  })
-  const sourceContent = useMutation({
-    mutationFn: ({ documentId, inline }: { documentId: string; inline: boolean }) =>
-      api.sourceContent(documentId, inline),
-    onSuccess: (blob, variables) => {
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.target = variables.inline ? '_blank' : '_self'
-      link.rel = 'noopener noreferrer'
-      if (!variables.inline) {
-        link.download = originalSource.data?.originalFileName ?? 'source'
-      }
-      link.click()
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
-    },
-  })
-  const lifecycle = useMutation({
-    mutationFn: ({
-      document,
-      status,
-    }: {
-      document: DocumentView
-      status: 'ACTIVE' | 'ARCHIVED' | 'DELETED'
-    }) => api.transitionDocument(document.id, status, document.version),
-    onSuccess: async (value) => {
-      setSelected((current) =>
-        current?.id === value.documentId
-          ? {
-              ...current,
-              status: value.status,
-              version: value.version,
-              updatedAt: value.updatedAt,
-            }
-          : current,
-      )
-      await queryClient.invalidateQueries({ queryKey: ['documents'] })
-      await queryClient.invalidateQueries({ queryKey: ['overview'] })
-      await queryClient.invalidateQueries({
-        queryKey: ['document-projections', value.documentId],
-      })
-    },
   })
 
   if (documents.isPending || spaces.isPending) return <LoadingState />
@@ -163,12 +91,47 @@ export function DocumentsPage() {
   )
   const pageNumber = Math.floor(documents.data.offset / pageSize) + 1
   const pageCount = Math.max(1, Math.ceil(documents.data.total / pageSize))
-  const retryBelongsToSelected = Boolean(
-    selected && retryProjection.variables?.documentId === selected.id,
-  )
-  const lifecycleBelongsToSelected = Boolean(
-    selected && lifecycle.variables?.document.id === selected.id,
-  )
+
+  function updateFilter<Key extends keyof DocumentFilters>(
+    key: Key,
+    value: DocumentFilters[Key],
+  ) {
+    setDraftFilters((current) => ({ ...current, [key]: value }))
+    setFilterError(undefined)
+  }
+
+  function applyFilters(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const error = validateFilterRange(draftFilters)
+    if (error) {
+      setFilterError(error)
+      return
+    }
+    setFilterError(undefined)
+    setOffset(0)
+    setAppliedFilters({ ...draftFilters })
+  }
+
+  function resetFilters() {
+    setDraftFilters(emptyFilters)
+    setAppliedFilters(emptyFilters)
+    setFilterError(undefined)
+    setOffset(0)
+  }
+
+  function openDocument(documentId: string) {
+    navigate(`/documents/${encodeURIComponent(documentId)}`)
+  }
+
+  function openDocumentFromKeyboard(
+    event: KeyboardEvent<HTMLTableRowElement>,
+    documentId: string,
+  ) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      openDocument(documentId)
+    }
+  }
 
   return (
     <div className="page-stack">
@@ -176,31 +139,43 @@ export function DocumentsPage() {
         <div>
           <span className="eyebrow">SOURCE TO EVIDENCE</span>
           <h2>查看文档、活动修订和索引投影</h2>
-          <p>点击文档可检查实际进入检索系统的 Chunk 和来源定位。</p>
+          <p>筛选文档后进入独立详情页，检查原文、修订、Chunk 和投影状态。</p>
         </div>
-        <div className="button-row">
-          <button onClick={() => setUploading(true)}>
-            <Plus size={17} />
-            写入 Markdown
-          </button>
-          <button className="primary-button" onClick={() => setUploadingFile(true)}>
-            <Upload size={17} />
-            上传文件
-          </button>
-        </div>
+        <button
+          className="primary-button"
+          disabled={!draftFilters.spaceId}
+          title={
+            draftFilters.spaceId
+              ? '进入该空间的数据抽取与摄取工作台'
+              : '请先选择知识空间'
+          }
+          onClick={() =>
+            navigate(
+              `/spaces/${encodeURIComponent(draftFilters.spaceId)}/extraction`,
+            )
+          }
+        >
+          <Upload size={17} />
+          {draftFilters.spaceId ? '多文件摄取' : '先选择空间'}
+        </button>
       </div>
 
       <Panel>
-        <div className="toolbar">
+        <form className="toolbar document-filter-toolbar" onSubmit={applyFilters}>
+          <label>
+            文档名称
+            <input
+              value={draftFilters.title}
+              maxLength={512}
+              placeholder="输入标题关键字"
+              onChange={(event) => updateFilter('title', event.target.value)}
+            />
+          </label>
           <label>
             知识空间
             <select
-              value={spaceId}
-              onChange={(event) => {
-                setSpaceId(event.target.value)
-                setOffset(0)
-                setSelected(undefined)
-              }}
+              value={draftFilters.spaceId}
+              onChange={(event) => updateFilter('spaceId', event.target.value)}
             >
               <option value="">全部空间</option>
               {spaces.data.map((space) => (
@@ -211,30 +186,110 @@ export function DocumentsPage() {
             </select>
           </label>
           <label>
+            来源
+            <input
+              value={draftFilters.source}
+              maxLength={512}
+              placeholder="类型、文件名或来源地址"
+              onChange={(event) => updateFilter('source', event.target.value)}
+            />
+          </label>
+          <label>
             文档状态
             <select
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value)
-                setOffset(0)
-                setSelected(undefined)
-              }}
+              value={draftFilters.status}
+              onChange={(event) => updateFilter('status', event.target.value)}
             >
               <option value="">默认（不含已删除）</option>
               <option value="ACTIVE">活动</option>
               <option value="ARCHIVED">已归档</option>
+              <option value="DEPRECATED">已弃用</option>
               <option value="DELETED">已删除</option>
             </select>
           </label>
+          <ProjectionStatusFilter
+            label="关键词索引"
+            value={draftFilters.keywordStatus}
+            onChange={(value) => updateFilter('keywordStatus', value)}
+          />
+          <ProjectionStatusFilter
+            label="向量索引"
+            value={draftFilters.vectorStatus}
+            onChange={(value) => updateFilter('vectorStatus', value)}
+          />
+          <label>
+            Chunk 数下限
+            <input
+              value={draftFilters.minimumChunkCount}
+              type="number"
+              min={0}
+              step={1}
+              placeholder="不限"
+              onChange={(event) =>
+                updateFilter('minimumChunkCount', event.target.value)
+              }
+            />
+          </label>
+          <label>
+            Chunk 数上限
+            <input
+              value={draftFilters.maximumChunkCount}
+              type="number"
+              min={0}
+              step={1}
+              placeholder="不限"
+              onChange={(event) =>
+                updateFilter('maximumChunkCount', event.target.value)
+              }
+            />
+          </label>
+          <label>
+            更新起始时间
+            <input
+              value={draftFilters.updatedFrom}
+              type="datetime-local"
+              onChange={(event) => updateFilter('updatedFrom', event.target.value)}
+            />
+          </label>
+          <label>
+            更新截止时间
+            <input
+              value={draftFilters.updatedTo}
+              type="datetime-local"
+              onChange={(event) => updateFilter('updatedTo', event.target.value)}
+            />
+          </label>
+          <div className="document-filter-actions">
+            <button type="button" onClick={resetFilters}>
+              <RotateCcw size={15} />
+              重置
+            </button>
+            <button className="primary-button" disabled={documents.isFetching}>
+              <Filter size={15} />
+              {documents.isFetching ? '筛选中…' : '应用筛选'}
+            </button>
+          </div>
           <span className="toolbar-count">
             {documents.isFetching ? '正在刷新 · ' : ''}
             共 {documents.data.total} 篇文档
           </span>
+          {filterError && (
+            <div className="document-filter-error" role="alert">
+              {filterError}
+            </div>
+          )}
+        </form>
+
+        <div className="document-index-help" role="note">
+          <strong>索引状态说明：</strong>
+          关键词索引和向量索引表示文档<strong>当前活动修订</strong>
+          在对应检索通道中的投影状态；它们不是原始文件是否存在的标记。
         </div>
+
         {!documents.data.items.length ? (
           <EmptyState
             title="没有符合条件的文档"
-            description="上传 Markdown 或配置外部连接器后，文档会显示在这里。"
+            description="正式多文件摄取或连接器同步后，文档会显示在这里。"
           />
         ) : (
           <div className="table-wrap">
@@ -245,16 +300,25 @@ export function DocumentsPage() {
                   <th>空间</th>
                   <th>来源</th>
                   <th>状态</th>
-                  <th>Chunk</th>
-                  <th>关键词</th>
-                  <th>向量</th>
+                  <th>Chunk 数</th>
+                  <th>关键词索引</th>
+                  <th>向量索引</th>
                   <th>更新时间</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {documents.data.items.map((document) => (
-                  <tr key={document.id} onClick={() => setSelected(document)}>
+                  <tr
+                    className="document-table-row"
+                    key={document.id}
+                    role="link"
+                    tabIndex={0}
+                    onClick={() => openDocument(document.id)}
+                    onKeyDown={(event) =>
+                      openDocumentFromKeyboard(event, document.id)
+                    }
+                  >
                     <td>
                       <div className="document-cell">
                         <FileText size={17} />
@@ -268,7 +332,9 @@ export function DocumentsPage() {
                     <td>
                       <div className="source-cell">
                         <span>{document.sourceType}</span>
-                        {document.sourceMediaType && <small>{document.sourceMediaType}</small>}
+                        {document.sourceMediaType && (
+                          <small>{document.sourceMediaType}</small>
+                        )}
                       </div>
                     </td>
                     <td>
@@ -299,13 +365,17 @@ export function DocumentsPage() {
             <div className="button-row">
               <button
                 disabled={documents.isFetching || offset === 0}
-                onClick={() => setOffset((current) => Math.max(0, current - pageSize))}
+                onClick={() =>
+                  setOffset((current) => Math.max(0, current - pageSize))
+                }
               >
                 <ChevronLeft size={15} />
                 上一页
               </button>
               <button
-                disabled={documents.isFetching || lastDocument >= documents.data.total}
+                disabled={
+                  documents.isFetching || lastDocument >= documents.data.total
+                }
                 onClick={() => setOffset((current) => current + pageSize)}
               >
                 下一页
@@ -315,603 +385,65 @@ export function DocumentsPage() {
           </div>
         )}
       </Panel>
-
-      {selected && (
-        <div className="drawer-backdrop" onMouseDown={() => setSelected(undefined)}>
-          <aside className="drawer" onMouseDown={(event) => event.stopPropagation()}>
-            <header>
-              <div>
-                <span className="eyebrow">DOCUMENT INSPECTOR</span>
-                <h2>{selected.title}</h2>
-                <p className="mono">{selected.id}</p>
-              </div>
-              <button className="icon-button" onClick={() => setSelected(undefined)}>
-                <X size={18} />
-              </button>
-            </header>
-            <div className="detail-grid">
-              <Detail label="状态" value={<StatusBadge value={selected.status} />} />
-              <Detail label="来源" value={selected.sourceType} />
-              <Detail label="活动修订" value={selected.activeRevisionId?.slice(0, 8)} />
-              <Detail label="Chunk" value={selected.chunkCount} />
-            </div>
-            <div className="document-lifecycle-actions">
-              {selected.status === 'ACTIVE' ? (
-                <>
-                  <button
-                    disabled={lifecycle.isPending}
-                    onClick={() =>
-                      lifecycle.mutate({ document: selected, status: 'ARCHIVED' })
-                    }
-                  >
-                    <Archive size={15} />
-                    归档
-                  </button>
-                  <button
-                    className="danger-button"
-                    disabled={lifecycle.isPending}
-                    onClick={() => {
-                      if (window.confirm('确认软删除该文档？原始数据仍保留用于恢复和审计。')) {
-                        lifecycle.mutate({ document: selected, status: 'DELETED' })
-                      }
-                    }}
-                  >
-                    <Trash2 size={15} />
-                    软删除
-                  </button>
-                </>
-              ) : (
-                <button
-                  className="primary-button"
-                  disabled={lifecycle.isPending}
-                  onClick={() =>
-                    lifecycle.mutate({ document: selected, status: 'ACTIVE' })
-                  }
-                >
-                  <RotateCcw size={15} />
-                  恢复为活动文档
-                </button>
-              )}
-            </div>
-            {lifecycleBelongsToSelected && lifecycle.error && (
-              <ErrorState error={lifecycle.error} />
-            )}
-            {selected.originalFileName && (
-              <>
-                <h3 className="section-title">原始文件</h3>
-                {originalSource.isPending && (
-                  <LoadingState label="正在读取原文元数据" />
-                )}
-                {originalSource.error && <ErrorState error={originalSource.error} />}
-                {sourceContent.error && <ErrorState error={sourceContent.error} />}
-                {originalSource.data && (
-                  <div className="source-card">
-                    <div className="detail-grid">
-                      <Detail label="文件名" value={originalSource.data.originalFileName} />
-                      <Detail label="媒体类型" value={originalSource.data.mediaType} />
-                      <Detail
-                        label="文件大小"
-                        value={formatBytes(originalSource.data.contentLength)}
-                      />
-                      <Detail
-                        label="保留时间"
-                        value={formatTime(originalSource.data.storedAt)}
-                      />
-                    </div>
-                    <div className="button-row">
-                      {originalSource.data.previewable && (
-                        <button
-                          disabled={sourceContent.isPending}
-                          onClick={() =>
-                            sourceContent.mutate({ documentId: selected.id, inline: true })
-                          }
-                        >
-                          <Eye size={15} />
-                          预览原文
-                        </button>
-                      )}
-                      <button
-                        disabled={sourceContent.isPending}
-                        onClick={() =>
-                          sourceContent.mutate({ documentId: selected.id, inline: false })
-                        }
-                      >
-                        <Download size={15} />
-                        下载原文
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-            <h3 className="section-title">外部索引投影</h3>
-            {projections.isPending && <LoadingState label="正在读取投影任务" />}
-            {projections.error && <ErrorState error={projections.error} />}
-            {retryBelongsToSelected && retryProjection.error && (
-              <ErrorState error={retryProjection.error} />
-            )}
-            {projections.data && (
-              <ProjectionJobs
-                documentId={selected.id}
-                jobs={projections.data}
-                retryDisabled={retryProjection.isPending}
-                retrying={retryBelongsToSelected && retryProjection.isPending}
-                retryingType={
-                  retryBelongsToSelected
-                    ? retryProjection.variables?.projectionType
-                    : undefined
-                }
-                onRetry={(projectionType) =>
-                  retryProjection.mutate({
-                    documentId: selected.id,
-                    projectionType,
-                  })
-                }
-              />
-            )}
-            <DocumentRevisionHistory
-              key={selected.id}
-              documentId={selected.id}
-            />
-            <h3 className="section-title">活动修订的知识块</h3>
-            {chunks.isPending && <LoadingState label="正在读取知识块" />}
-            {chunks.error && <ErrorState error={chunks.error} />}
-            <div className="chunk-list">
-              {chunks.data?.map((chunk) => (
-                <article className="chunk-card" key={chunk.id}>
-                  <div>
-                    <span>#{chunk.ordinal + 1}</span>
-                    <strong>{chunk.sectionPath.join(' / ') || '正文'}</strong>
-                  </div>
-                  <p>{chunk.content}</p>
-                  <footer className="mono">{chunk.contentHash.slice(0, 16)}</footer>
-                </article>
-              ))}
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {uploading && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setUploading(false)
-          }}
-        >
-          <Panel className="modal modal-wide" title="写入 Markdown 文档">
-            <form
-              className="form-stack"
-              onSubmit={(event) => submitUpload(event, upload.mutate)}
-              onMouseDown={(event) => event.stopPropagation()}
-            >
-              <div className="form-grid">
-                <label>
-                  知识空间
-                  <select name="spaceId" required defaultValue={spaceId}>
-                    <option value="">请选择</option>
-                    {spaces.data.map((space) => (
-                      <option value={space.id} key={space.id}>
-                        {space.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  外部标识
-                  <input name="externalId" required placeholder="handbook/oncall" />
-                </label>
-                <label>
-                  标题
-                  <input name="title" required placeholder="生产故障处理手册" />
-                </label>
-                <label>
-                  来源地址
-                  <input name="sourceUri" required placeholder="obsidian://open/..." />
-                </label>
-              </div>
-              <label>
-                Markdown 正文
-                <textarea
-                  name="content"
-                  required
-                  rows={12}
-                  placeholder={'# 标题\n\n## 章节\n\n知识正文…'}
-                />
-              </label>
-              {upload.error && <ErrorState error={upload.error} />}
-              <div className="form-actions">
-                <button type="button" onClick={() => setUploading(false)}>
-                  取消
-                </button>
-                <button className="primary-button" disabled={upload.isPending}>
-                  {upload.isPending ? '处理中…' : '解析并写入'}
-                </button>
-              </div>
-            </form>
-          </Panel>
-        </div>
-      )}
-
-      {uploadingFile && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setUploadingFile(false)
-          }}
-        >
-          <Panel className="modal" title="上传原始文件">
-            <form
-              className="form-stack"
-              onSubmit={(event) => submitFileUpload(event, fileUpload.mutate)}
-              onMouseDown={(event) => event.stopPropagation()}
-            >
-              <label>
-                知识空间
-                <select name="spaceId" required defaultValue={spaceId}>
-                  <option value="">请选择</option>
-                  {spaces.data.map((space) => (
-                    <option value={space.id} key={space.id}>
-                      {space.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                外部标识
-                <input name="externalId" required placeholder="handbook/oncall-pdf" />
-              </label>
-              <label>
-                标题（可选）
-                <input name="title" placeholder="未填写时使用原文件名" />
-              </label>
-              <label>
-                文件
-                <input
-                  name="file"
-                  type="file"
-                  required
-                  accept=".txt,.text,.log,.html,.htm,.xhtml,.pdf,.docx,text/plain,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                />
-              </label>
-              <p className="form-hint">
-                支持 TXT、HTML、PDF、DOCX，单文件不超过 25 MB。PDF 与 DOCX 会受到页数、解压大小和压缩比限制。
-              </p>
-              {fileUpload.error && <ErrorState error={fileUpload.error} />}
-              <div className="form-actions">
-                <button type="button" onClick={() => setUploadingFile(false)}>
-                  取消
-                </button>
-                <button className="primary-button" disabled={fileUpload.isPending}>
-                  {fileUpload.isPending ? '解析并写入中…' : '上传并写入'}
-                </button>
-              </div>
-            </form>
-          </Panel>
-        </div>
-      )}
     </div>
   )
 }
 
-function DocumentRevisionHistory({ documentId }: { documentId: string }) {
-  const api = useApi()
-  const [leftRevisionId, setLeftRevisionId] = useState('')
-  const [rightRevisionId, setRightRevisionId] = useState('')
-  const revisions = useQuery({
-    queryKey: ['document-revisions', documentId],
-    queryFn: () => api.documentRevisions(documentId),
-  })
-  const leftChunks = useQuery({
-    queryKey: ['document-revision-chunks', documentId, leftRevisionId],
-    queryFn: () => api.revisionChunks(documentId, leftRevisionId),
-    enabled: Boolean(leftRevisionId),
-  })
-  const rightChunks = useQuery({
-    queryKey: ['document-revision-chunks', documentId, rightRevisionId],
-    queryFn: () => api.revisionChunks(documentId, rightRevisionId),
-    enabled: Boolean(rightRevisionId),
-  })
-
-  const leftRevision = revisions.data?.find(
-    (revision) => revision.revisionId === leftRevisionId,
-  )
-  const rightRevision = revisions.data?.find(
-    (revision) => revision.revisionId === rightRevisionId,
-  )
-
-  return (
-    <section>
-      <h3 className="section-title">修订历史与对比</h3>
-      {revisions.isPending && <LoadingState label="正在读取修订历史" />}
-      {revisions.error && <ErrorState error={revisions.error} />}
-      {revisions.data && !revisions.data.length && (
-        <div className="inline-empty">当前文档没有可读取的修订。</div>
-      )}
-      {revisions.data && revisions.data.length > 0 && (
-        <>
-          <div className="revision-list">
-            {revisions.data.map((revision) => (
-              <article className="revision-card" key={revision.revisionId}>
-                <div>
-                  <strong>版本 {revision.revisionNumber}</strong>
-                  {revision.active && <StatusBadge value="ACTIVE" />}
-                </div>
-                <span>
-                  {revision.mediaType} · {revision.language} · {revision.chunkCount} 个
-                  Chunk
-                </span>
-                <small>
-                  {revision.parserVersion} · {formatTime(revision.createdAt)} ·{' '}
-                  {revision.contentHash.slice(0, 16)}
-                </small>
-              </article>
-            ))}
-          </div>
-          <div className="revision-selectors">
-            <label>
-              左侧版本
-              <select
-                value={leftRevisionId}
-                onChange={(event) => setLeftRevisionId(event.target.value)}
-              >
-                <option value="">按需选择</option>
-                {revisions.data.map((revision) => (
-                  <RevisionOption revision={revision} key={revision.revisionId} />
-                ))}
-              </select>
-            </label>
-            <label>
-              右侧版本
-              <select
-                value={rightRevisionId}
-                onChange={(event) => setRightRevisionId(event.target.value)}
-              >
-                <option value="">按需选择</option>
-                {revisions.data.map((revision) => (
-                  <RevisionOption revision={revision} key={revision.revisionId} />
-                ))}
-              </select>
-            </label>
-          </div>
-          {leftRevisionId && rightRevisionId && leftRevisionId === rightRevisionId && (
-            <div className="inline-empty">请选择两个不同修订进行对比。</div>
-          )}
-          {leftRevisionId && rightRevisionId && leftRevisionId !== rightRevisionId && (
-            <>
-              {(leftChunks.isPending || rightChunks.isPending) && (
-                <LoadingState label="正在按需读取修订内容" />
-              )}
-              {(leftChunks.error || rightChunks.error) && (
-                <ErrorState error={leftChunks.error ?? rightChunks.error} />
-              )}
-              {leftRevision &&
-                rightRevision &&
-                leftChunks.data &&
-                rightChunks.data && (
-                  <RevisionComparison
-                    leftRevision={leftRevision}
-                    rightRevision={rightRevision}
-                    leftChunks={leftChunks.data}
-                    rightChunks={rightChunks.data}
-                  />
-                )}
-            </>
-          )}
-        </>
-      )}
-    </section>
-  )
-}
-
-function RevisionOption({ revision }: { revision: DocumentRevisionView }) {
-  return (
-    <option value={revision.revisionId}>
-      版本 {revision.revisionNumber}
-      {revision.active ? '（活动）' : ''}
-    </option>
-  )
-}
-
-function RevisionComparison({
-  leftRevision,
-  rightRevision,
-  leftChunks,
-  rightChunks,
+function ProjectionStatusFilter({
+  label,
+  value,
+  onChange,
 }: {
-  leftRevision: DocumentRevisionView
-  rightRevision: DocumentRevisionView
-  leftChunks: Chunk[]
-  rightChunks: Chunk[]
-}) {
-  const leftByOrdinal = new Map(leftChunks.map((chunk) => [chunk.ordinal, chunk]))
-  const rightByOrdinal = new Map(rightChunks.map((chunk) => [chunk.ordinal, chunk]))
-  const ordinals = [...new Set([...leftByOrdinal.keys(), ...rightByOrdinal.keys()])]
-    .sort((left, right) => left - right)
-  const rows = ordinals.map((ordinal) => ({
-    ordinal,
-    left: leftByOrdinal.get(ordinal),
-    right: rightByOrdinal.get(ordinal),
-  }))
-
-  return (
-    <div className="revision-comparison">
-      <header>
-        <strong>版本 {leftRevision.revisionNumber}</strong>
-        <strong>版本 {rightRevision.revisionNumber}</strong>
-      </header>
-      {!rows.length && <div className="inline-empty">两个修订都没有 Chunk。</div>}
-      {rows.map(({ ordinal, left, right }) => {
-        const changed = left?.contentHash !== right?.contentHash
-        const leftLabel = !left
-          ? '此版无内容'
-          : !right
-            ? '右侧删除'
-            : changed
-              ? '有变化'
-              : '相同'
-        const rightLabel = !right
-          ? '此版无内容'
-          : !left
-            ? '右侧新增'
-            : changed
-              ? '有变化'
-              : '相同'
-        return (
-          <div className="revision-compare-row" key={ordinal}>
-            <RevisionChunk
-              chunk={left}
-              ordinal={ordinal}
-              changed={changed}
-              changeLabel={leftLabel}
-            />
-            <RevisionChunk
-              chunk={right}
-              ordinal={ordinal}
-              changed={changed}
-              changeLabel={rightLabel}
-            />
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function RevisionChunk({
-  chunk,
-  ordinal,
-  changed,
-  changeLabel,
-}: {
-  chunk: Chunk | undefined
-  ordinal: number
-  changed: boolean
-  changeLabel: string
+  label: string
+  value: string
+  onChange: (value: string) => void
 }) {
   return (
-    <article className={`revision-compare-item ${changed ? 'changed' : ''}`}>
-      <header>
-        <span>#{ordinal + 1}</span>
-        <small>{changeLabel}</small>
-      </header>
-      {chunk ? (
-        <>
-          <strong>{chunk.sectionPath.join(' / ') || '正文'}</strong>
-          <p>{chunk.content}</p>
-          <footer className="mono">{chunk.contentHash.slice(0, 16)}</footer>
-        </>
-      ) : (
-        <p className="revision-missing">此版本无对应 Chunk</p>
-      )}
-    </article>
+    <label>
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">全部状态</option>
+        <option value="SUCCEEDED">已完成</option>
+        <option value="PENDING">等待中</option>
+        <option value="FAILED">失败</option>
+        <option value="SKIPPED">未创建或已跳过</option>
+      </select>
+    </label>
   )
 }
 
-function ProjectionJobs({
-  documentId,
-  jobs,
-  retryDisabled,
-  retrying,
-  retryingType,
-  onRetry,
-}: {
-  documentId: string
-  jobs: ProjectionJob[]
-  retryDisabled: boolean
-  retrying: boolean
-  retryingType: ProjectionType | undefined
-  onRetry: (projectionType: ProjectionType) => void
-}) {
-  if (!jobs.length) {
-    return (
-      <div className="inline-empty">
-        当前文档没有可管理的活动修订投影任务；PostgreSQL 关键词检索无需异步投影。
-      </div>
-    )
+function validateFilterRange(filters: DocumentFilters) {
+  const minimum = optionalNonNegativeInteger(filters.minimumChunkCount)
+  const maximum = optionalNonNegativeInteger(filters.maximumChunkCount)
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+    return 'Chunk 数下限不能大于上限。'
   }
-  return (
-    <div className="projection-job-list" aria-label={`${documentId} 的投影任务`}>
-      {jobs.map((job) => (
-        <article className="projection-job-card" key={job.id}>
-          <header>
-            <div>
-              <strong>{job.projectionType}</strong>
-              <span>已尝试 {job.attemptCount} 次</span>
-            </div>
-            <StatusBadge value={job.status} />
-          </header>
-          <div className="projection-job-meta">
-            <span>可执行 {formatTime(job.availableAt)}</span>
-            <span>更新 {formatTime(job.updatedAt)}</span>
-          </div>
-          {job.lastErrorCode && <code>{job.lastErrorCode}</code>}
-          {job.status === 'DEAD' && (
-            <button
-              disabled={retryDisabled}
-              onClick={() => onRetry(job.projectionType)}
-            >
-              <RefreshCw
-                className={
-                  retrying && retryingType === job.projectionType ? 'spin' : undefined
-                }
-                size={14}
-              />
-              {retrying && retryingType === job.projectionType
-                ? '重新排队中…'
-                : '重试 DEAD 任务'}
-            </button>
-          )}
-        </article>
-      ))}
-    </div>
-  )
+  if (
+    filters.updatedFrom &&
+    filters.updatedTo &&
+    new Date(filters.updatedFrom).getTime() > new Date(filters.updatedTo).getTime()
+  ) {
+    return '更新起始时间不能晚于截止时间。'
+  }
+  return undefined
 }
 
-function Detail({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  )
+function optionalText(value: string) {
+  const normalized = value.trim()
+  return normalized || undefined
 }
 
-function submitUpload(
-  event: FormEvent<HTMLFormElement>,
-  mutate: (value: MarkdownDocumentInput) => void,
-) {
-  event.preventDefault()
-  const form = new FormData(event.currentTarget)
-  mutate({
-    spaceId: String(form.get('spaceId')),
-    externalId: String(form.get('externalId')).trim(),
-    title: String(form.get('title')).trim(),
-    sourceUri: String(form.get('sourceUri')).trim(),
-    content: String(form.get('content')),
-    language: 'zh-CN',
-    authority: 80,
-    metadata: { source: 'console' },
-  })
+function optionalNonNegativeInteger(value: string) {
+  if (!value) return undefined
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined
 }
 
-function submitFileUpload(
-  event: FormEvent<HTMLFormElement>,
-  mutate: (value: FormData) => void,
-) {
-  event.preventDefault()
-  const form = new FormData(event.currentTarget)
-  const title = String(form.get('title') ?? '').trim()
-  if (!title) form.delete('title')
-  form.set('language', 'zh-CN')
-  form.set('authority', '80')
-  mutate(form)
-}
-
-function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+/** datetime-local 使用浏览器本地时区，API 统一传递带时区的 UTC Instant。 */
+function localDateTimeToInstant(value: string) {
+  if (!value) return undefined
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString()
 }
 
 function formatTime(value: string) {

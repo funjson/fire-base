@@ -11,10 +11,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** HTML parser that retains headings, paragraphs, lists, tables, code and image captions. */
+/** 保留标题、段落、列表、表格、代码和图片说明的 HTML Parser。 */
 public final class HtmlDocumentParser implements DocumentParser {
 
-    /** Current parser contract version. */
+    /** 当前 Parser 契约版本。 */
     public static final String VERSION = "html-structure-v1";
 
     @Override
@@ -28,6 +28,11 @@ public final class HtmlDocumentParser implements DocumentParser {
     }
 
     @Override
+    public String canonicalMediaType() {
+        return "text/html";
+    }
+
+    @Override
     public Set<String> supportedMediaTypes() {
         return Set.of("text/html", "application/xhtml+xml");
     }
@@ -35,6 +40,16 @@ public final class HtmlDocumentParser implements DocumentParser {
     @Override
     public Set<String> supportedExtensions() {
         return Set.of(".html", ".htm", ".xhtml");
+    }
+
+    /** HTML 解析保留标题路径；表格当前只保证提供扁平检索文本。 */
+    @Override
+    public Set<ParserOutputCapability> outputCapabilities() {
+        return Set.of(
+                ParserOutputCapability.STANDARD_ELEMENTS,
+                ParserOutputCapability.HIERARCHY,
+                ParserOutputCapability.FLAT_TABLE_TEXT
+        );
     }
 
     @Override

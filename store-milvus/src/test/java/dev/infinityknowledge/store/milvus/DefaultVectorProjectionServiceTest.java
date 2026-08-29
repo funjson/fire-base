@@ -1,6 +1,7 @@
 package dev.infinityknowledge.store.milvus;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.document.KnowledgeDocument;
@@ -23,8 +24,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class DefaultVectorProjectionServiceTest {
 
@@ -35,16 +36,20 @@ class DefaultVectorProjectionServiceTest {
         KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
         DocumentId documentId = DocumentId.random();
         UUID revisionId = UUID.randomUUID();
+        UUID elementId = UUID.randomUUID();
+        String content = "content";
         KnowledgeChunk chunk = new KnowledgeChunk(
                 UUID.randomUUID(),
                 tenantId,
                 spaceId,
                 documentId,
                 revisionId,
-                List.of(UUID.randomUUID()),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of("Test"),
-                "content",
+                content,
+                "Test\n\n" + content,
                 "hash",
                 Map.of()
         );
@@ -101,16 +106,20 @@ class DefaultVectorProjectionServiceTest {
         KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
         DocumentId documentId = DocumentId.random();
         UUID revisionId = UUID.randomUUID();
+        UUID elementId = UUID.randomUUID();
+        String content = "content";
         KnowledgeChunk chunk = new KnowledgeChunk(
                 UUID.randomUUID(),
                 tenantId,
                 spaceId,
                 documentId,
                 revisionId,
-                List.of(UUID.randomUUID()),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of("Test"),
-                "content",
+                content,
+                "Test\n\n" + content,
                 "hash",
                 Map.of()
         );
@@ -150,6 +159,41 @@ class DefaultVectorProjectionServiceTest {
         assertEquals("zh-CN", record.language());
     }
 
+    @Test
+    void embedsContextualTextButKeepsRawContentInTheProjectionRecord() {
+        EmbeddingSpec spec = new EmbeddingSpec("test", "model", 2);
+        TenantId tenantId = new TenantId("tenant-a");
+        KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
+        DocumentId documentId = DocumentId.random();
+        UUID elementId = UUID.randomUUID();
+        String content = "原始正文";
+        KnowledgeChunk chunk = new KnowledgeChunk(
+                UUID.randomUUID(), tenantId, spaceId, documentId, UUID.randomUUID(),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
+                0, List.of("标题"), content, "标题\n\n" + content, "hash", Map.of()
+        );
+        java.util.concurrent.atomic.AtomicReference<List<String>> embedded =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        RecordingVectorIndex index = new RecordingVectorIndex();
+        DefaultVectorProjectionService service = new DefaultVectorProjectionService(
+                (texts, ignored) -> {
+                    embedded.set(texts);
+                    return List.of(new EmbeddingVector(0, List.of(1.0D, 0.0D)));
+                },
+                spec,
+                "generation-c",
+                index,
+                allowAllRevisions()
+        );
+        KnowledgeDocument document = document(documentId, tenantId, spaceId);
+
+        service.project(document, List.of(chunk));
+
+        assertEquals(List.of("标题\n\n原始正文"), embedded.get());
+        assertEquals("原始正文", index.records.getFirst().chunk().content());
+    }
+
     private static ActiveRevisionGuard allowAllRevisions() {
         return new ActiveRevisionGuard() {
             @Override
@@ -169,6 +213,26 @@ class DefaultVectorProjectionServiceTest {
                 return List.copyOf(candidates);
             }
         };
+    }
+
+    private static KnowledgeDocument document(
+            DocumentId documentId,
+            TenantId tenantId,
+            KnowledgeSpaceId spaceId
+    ) {
+        Instant now = Instant.parse("2026-08-03T00:00:00Z");
+        return new KnowledgeDocument(
+                documentId,
+                tenantId,
+                spaceId,
+                "Document",
+                new SourceDescriptor("test", SourceType.API, "document", "urn:test", Map.of()),
+                DocumentStatus.ACTIVE,
+                100,
+                Map.of(),
+                now,
+                now
+        );
     }
 
     private static final class RecordingVectorIndex implements VectorIndex {

@@ -1,5 +1,6 @@
 package dev.infinityknowledge.store.neo4j;
 
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
@@ -112,16 +113,20 @@ class Neo4jGraphProjectionExecutorTest {
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
+        UUID elementId = UUID.randomUUID();
+        String content = "Order Service depends on Redis.";
         KnowledgeChunk chunk = new KnowledgeChunk(
                 chunkId,
                 tenantId,
                 spaceId,
                 document.id(),
                 revisionId,
-                List.of(UUID.randomUUID()),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of("Architecture"),
-                "Order Service depends on Redis.",
+                content,
+                "Architecture\n\n" + content,
                 "abc123",
                 Map.of()
         );

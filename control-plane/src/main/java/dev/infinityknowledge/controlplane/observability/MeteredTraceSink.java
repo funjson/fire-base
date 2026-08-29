@@ -18,6 +18,7 @@ public final class MeteredTraceSink implements TraceSink {
     private static final Set<String> STEP_NAMES = Set.of(
             "ACCESS_POLICY",
             "QUERY_ANALYSIS",
+            "QUERY_PLANNING",
             "RETRIEVER_KEYWORD",
             "RETRIEVER_VECTOR",
             "RETRIEVER_GRAPH",

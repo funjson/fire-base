@@ -94,7 +94,20 @@ class PostgresKnowledgeAdministrationStoreIT {
     void treatsBlankFiltersAsAbsentAndBoundsPagination() {
         var page = store.documents(
                 new TenantId("tenant-a"),
-                new KnowledgeAdministrationStore.DocumentFilter(" ", "\t", 0, -1)
+                new KnowledgeAdministrationStore.DocumentFilter(
+                        " ",
+                        "\t",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        0,
+                        -1
+                )
         );
 
         assertEquals(3, page.total());
@@ -117,7 +130,20 @@ class PostgresKnowledgeAdministrationStoreIT {
     ) {
         return store.documents(
                 new TenantId("tenant-a"),
-                new KnowledgeAdministrationStore.DocumentFilter(spaceId, status, 100, 0)
+                new KnowledgeAdministrationStore.DocumentFilter(
+                        spaceId,
+                        status,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        100,
+                        0
+                )
         );
     }
 

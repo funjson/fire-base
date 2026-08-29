@@ -10,21 +10,22 @@ Infinity Knowledge Runtime 为企业 Agent 提供可治理、可追溯、可评�
 Agent Client / Console / Application
                  | HTTP + OIDC JWT
                  v
-             Control Plane
-                 |
-        Application Services
-                 |
-          Domain / SPI Ports
-        /       |       |       \
- PostgreSQL  Elastic  Milvus   Neo4j       MinIO
- fact/tasks    BM25    vector   graph    original source
+     Control Plane (HTTP / Auth / Composition) ---\
+                                                   > Knowledge Runtime / Extraction Engine
+     knowledge-jobs (thin scheduled triggers) ----/                    |
+                                                              Domain / SPI Ports
+       /        |        |        |        \
+PostgreSQL  Elastic   Milvus    Neo4j     MinIO
+fact/tasks    BM25     vector    graph   source assets
 ```
 
 核心数据路径：
 
 ```text
-Markdown / Rich file / Obsidian
-  -> Document + immutable Revision + Element + Chunk + Source Reference
+Markdown / Multi-file upload / Rich file / Obsidian
+  -> immutable SourceAsset in MinIO + PostgreSQL Run/Item
+  -> Normalize -> Parse -> Clean -> Chunk
+  -> TEST_ONLY diagnostics/gates OR transactional Document/Revision publication
   -> transactional Projection Jobs
   -> PostgreSQL / Elasticsearch / Milvus / Neo4j
   -> Keyword + Vector + Graph + Published Wiki retrieval
@@ -36,15 +37,12 @@ Markdown / Rich file / Obsidian
 ## 2. 模块和依赖方向
 
 ```text
-knowledge-domain
-       ^
-knowledge-spi <---- knowledge-evaluation
-       ^
-knowledge-runtime     knowledge-ingestion     knowledge-compiler
-       ^                       ^                      ^
-store-*       connector-obsidian / provider-zhipu ---+
-       ^                       ^
-       +----------- control-plane
+control-plane -> knowledge-runtime -> knowledge-ingestion / knowledge-evaluation
+control-plane -> knowledge-compiler / knowledge-spi / store-* / provider-*（仅装配）
+knowledge-jobs -> runtime 一次性任务动作（Spring 定时入站适配器）
+parser-docling -> knowledge-ingestion
+tokenizer-huggingface -> knowledge-ingestion
+knowledge-spi -> knowledge-domain
 
 knowledge-agent-client ---> HTTP API
 knowledge-console -------> HTTP API
@@ -56,6 +54,7 @@ knowledge-console -------> HTTP API
 - `knowledge-spi` 只暴露领域端口，不泄露 ES/Milvus/Neo4j/MinIO 类型；
 - Controller 只处理 HTTP、JWT、验证和 DTO；Application Service 编排用例；
 - SQL 只存在于 `store-postgres`；具体存储由 Composition Root 注入；
+- `@Scheduled` 只存在于 `knowledge-jobs`；Runtime 不创建 Spring Scheduler 或长期线程；
 - Connector 通过 `SourceConnectorProvider` 注册，不由应用层直接构造；
 - 不为每张表建立 Repository，按用例聚合端口以维持可读性。
 
@@ -81,13 +80,16 @@ processor version。相同活动指纹幂等；命中历史指纹时重新激活
 
 ### 3.2 原文件
 
-文件先写入 MinIO，再在 PostgreSQL 事务内绑定不可猜测的对象引用。系统不向
-HTTP 客户端暴露 Bucket/Object Key，只返回授权后的元数据或流。失败路径会做
-补偿删除；进程在对象写入和数据库提交之间硬崩溃仍可能留下孤儿对象，当前没有
-后台 orphan sweeper。
+多文件任务先建立接收意图，再逐文件计算 SHA-256、写入 MinIO，并把不可猜测的
+SourceAsset 引用登记到 PostgreSQL。系统不向 HTTP 客户端暴露 Bucket/Object Key，
+只返回授权后的元数据或流。失败、取消、重复和冲突都保留原件，不做补偿删除；进程在
+对象写入与 SourceAsset 登记之间硬崩溃仍可能留下极小窗口的孤儿对象，当前没有后台
+orphan reconciler。
 
-解析预算限制源文件大小、解压后大小、页面数、Element 数、文本长度、归档条目
-和压缩比。当前解析 TXT/Markdown、HTML、PDF 和 DOCX；不支持 Excel/PPT/OCR。
+解析预算限制源文件大小、批次总量、解压后大小、页面数、Element 数、文本长度、归档
+条目和压缩比。当前解析 TXT/Markdown、HTML、PDF 和 DOCX；可选 Docling 提供 PDF 第二
+实现，DOCX 在固定部署的表格覆盖 Golden 未通过时 fail-closed 并保持禁用。不支持
+Excel/PPT/图片 OCR。
 
 ### 3.3 可重建投影
 
@@ -123,8 +125,8 @@ Flyway V8 为投影租约增加 fencing token 与 dirty/requeue。Worker 只有�
 10. Evidence Builder 返回原始 Chunk Citation，Trace 记录步骤、计数和耗时。
 
 标准模式允许单通道降级并返回 Warning；`acceptance` Profile 对配置的 ES、Milvus、
-Neo4j 和 GLM 依赖执行更严格装配/探测。当前没有 Query Rewrite、Multi-query 或
-父子/相邻 Chunk 扩展。
+Neo4j 和 GLM 依赖执行更严格装配/探测。可选 Query Planner 支持保留原查询的 Rewrite/
+Multi-query；当前没有 Query Decomposition、多跳迭代或父子/相邻 Chunk 扩展。
 
 ## 5. Graph 知识层
 
@@ -151,12 +153,19 @@ Retriever 返回页面关联的原始活动 Chunk，而不是把未经验证的�
 
 当前没有 Claim/Link/Diff/回滚、来源变更影响分析或自动增量重编译。
 
-## 7. 异步任务和 Connector 对账
+## 7. 异步任务、调度与 Connector 对账
 
-Projection、Connector 和 Evaluation 都使用有界批次/线程池。Connector/Evaluation
-Run 先持久化为 `PENDING`，Coordinator 用租约和 fencing token Claim，周期性
-恢复 PENDING 或租约过期的 RUNNING 任务。执行快照持久化，过期 Worker 无权提交；
-立即提交遇到队列饱和时 Run 进入明确失败状态，而不是遗留可被误执行的任务。
+所有 Spring 定时触发集中在 `knowledge-jobs`，它只调用各业务模块的一次性有界动作。
+多文件 `TEST_ONLY/INGEST` 使用 PostgreSQL 原子领取、进程级 workerId 和 heartbeat，
+不引入 Lease/Fence Token 对象；同 Space 只允许一个活动 Run。Space 创建时固化用户配置以及
+Pipeline、Normalizer、逐格式 Parser、Cleaner、Chunker/Tokenizer 的实际实现合同。新 Run
+在保存原件前校验，Worker 在任何 Item 前复核；INGEST 发布事务再以合同指纹执行最终写栅栏。
+投影代际只从 Space 已存合同派生，不要求当前部署仍安装旧 Adapter。TEST_ONLY 只生成诊断、
+预览和 Gate，INGEST 在发布窗口原子写入正式事实并投递 Projection Job。排队/运行任务可协作
+取消，进入短暂 PUBLISHING 事务窗口后拒绝不安全取消。
+
+Connector/Evaluation 保留其已有的可恢复租约语义：Run 先持久化为 `PENDING`，Coordinator
+周期恢复待处理或过期任务，旧执行者无权提交。该机制不泄漏到多文件抽取主线。
 
 Obsidian 每次成功完整扫描产生 Snapshot Manifest。只有仍持有租约且本轮完整
 成功时才原子提升 Manifest，并将上一成功快照中缺失的文档归档；失败/部分扫描
@@ -179,11 +188,11 @@ Obsidian 每次成功完整扫描产生 Snapshot Manifest。只有仍持有租�
 
 | 组件 | 职责 |
 |---|---|
-| PostgreSQL | 权威事实、ACL、修订、Chunk、任务、Wiki、评测、Trace、Audit |
+| PostgreSQL | 权威事实、ACL、SourceAsset、抽取/摄取任务、修订、Chunk、Wiki、评测、Trace、Audit |
 | Elasticsearch | 可重建 BM25/精确词投影 |
 | Milvus | 可重建 Chunk Embedding 投影 |
 | Neo4j | 可重建关系投影和 Graph traversal |
-| MinIO | 原文件保留；同时是本地 Milvus 的对象存储依赖 |
+| MinIO | 不可变原文件保留；失败、取消、重复和冲突后仍可按权限下载 |
 | GLM | Embedding；可选 Graph/Wiki 生成 |
 | Keycloak | OIDC、Audience、测试角色和用户 |
 

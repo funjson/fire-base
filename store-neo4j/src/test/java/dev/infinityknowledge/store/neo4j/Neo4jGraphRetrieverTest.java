@@ -68,7 +68,7 @@ class Neo4jGraphRetrieverTest {
                 new Neo4jGraphConfig("neo4j", 2, 50)
         );
         AccessScope scope = AccessScope.all(tenantId, Set.of(spaceId));
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 new PrincipalContext(
                         tenantId,
@@ -113,7 +113,7 @@ class Neo4jGraphRetrieverTest {
                 retainingGuard(),
                 new Neo4jGraphConfig("neo4j", 1, 10)
         );
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 new PrincipalContext(
                         tenantId,
@@ -172,7 +172,7 @@ class Neo4jGraphRetrieverTest {
                 activeOnly(activeDocument, activeRevision),
                 new Neo4jGraphConfig("neo4j", 3, 50)
         );
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 new PrincipalContext(
                         tenantId,

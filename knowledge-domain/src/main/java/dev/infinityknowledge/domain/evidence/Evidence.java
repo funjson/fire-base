@@ -12,7 +12,7 @@ import java.util.UUID;
  *
  * @param id 证据标识
  * @param content 证据正文
- * @param relevance 融合后的相关性
+ * @param relevance 最终排序阶段的相关性；已启用模型精排时为本次查询内分数
  * @param authority 权威等级
  * @param channels 支持该证据的召回通道
  * @param citation 原文引用
@@ -43,4 +43,3 @@ public record Evidence(
         Objects.requireNonNull(citation, "citation must not be null");
     }
 }
-

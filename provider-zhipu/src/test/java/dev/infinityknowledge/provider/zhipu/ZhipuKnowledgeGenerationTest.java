@@ -2,6 +2,7 @@ package dev.infinityknowledge.provider.zhipu;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentId;
 import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
@@ -164,16 +165,20 @@ class ZhipuKnowledgeGenerationTest {
                 now,
                 now
         );
+        UUID elementId = UUID.randomUUID();
+        String content = "Order Service depends on Redis.";
         KnowledgeChunk chunk = new KnowledgeChunk(
                 UUID.randomUUID(),
                 TENANT,
                 SPACE,
                 documentId,
                 revisionId,
-                List.of(UUID.randomUUID()),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of("Architecture"),
-                "Order Service depends on Redis.",
+                content,
+                "Architecture\n\n" + content,
                 "hash",
                 Map.of()
         );

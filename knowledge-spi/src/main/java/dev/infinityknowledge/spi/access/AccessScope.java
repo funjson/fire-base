@@ -160,6 +160,22 @@ public record AccessScope(
         };
     }
 
+    /**
+     * 将已授权范围收窄到一个 Space，同时保持文档白名单语义不变。
+     *
+     * <p>该方法只能收窄既有授权，不能用来选择尚未授权的 Space。</p>
+     *
+     * @param spaceId 已在当前范围内的 Space
+     * @return 仅包含目标 Space 的授权范围
+     */
+    public AccessScope forSpace(KnowledgeSpaceId spaceId) {
+        Objects.requireNonNull(spaceId, "spaceId must not be null");
+        if (!allowsSpace(spaceId)) {
+            throw new IllegalArgumentException("spaceId is outside the authorized scope");
+        }
+        return new AccessScope(tenantId, mode, Set.of(spaceId), documentIds);
+    }
+
     private static void requireSpaces(Set<KnowledgeSpaceId> spaceIds) {
         if (spaceIds.isEmpty()) {
             throw new IllegalArgumentException(

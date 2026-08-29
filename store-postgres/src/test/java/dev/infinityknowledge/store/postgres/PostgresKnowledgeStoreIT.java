@@ -1,6 +1,7 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentRevision;
 import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.ElementType;
@@ -21,10 +22,13 @@ import dev.infinityknowledge.spi.access.KnowledgeAccessDeniedException;
 import dev.infinityknowledge.spi.access.AccessScope;
 import dev.infinityknowledge.spi.embedding.EmbeddingSpec;
 import dev.infinityknowledge.spi.indexing.ProjectionJob;
+import dev.infinityknowledge.spi.indexing.IndexPhysicalContract;
 import dev.infinityknowledge.spi.indexing.ProjectionStatus;
 import dev.infinityknowledge.spi.indexing.ProjectionType;
 import dev.infinityknowledge.spi.retrieval.QueryPlan;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
+import dev.infinityknowledge.spi.ingestion.DocumentProcessingContract;
+import dev.infinityknowledge.spi.ingestion.DocumentProcessingContractMismatchException;
 import dev.infinityknowledge.spi.ingestion.KnowledgeWriteBatch;
 import dev.infinityknowledge.spi.connector.ConnectorWriteFence;
 import dev.infinityknowledge.spi.management.DocumentLifecycleConflictException;
@@ -66,6 +70,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Testcontainers
 @EnabledIfEnvironmentVariable(named = "RUN_POSTGRES_TESTS", matches = "true")
 class PostgresKnowledgeStoreIT {
+    private static final String PROCESSING_CONTRACT_FINGERPRINT =
+            DocumentProcessingContract.create(
+                    "source-normalize-parse-clean-chunk-write-v1",
+                    "source-normalizer-schema-v1",
+                    Map.of("text/markdown", "markdown-builtin-v1"),
+                    "element-cleaner-v1",
+                    "structural-chunker-v1"
+            ).fingerprint();
+
     @Container
     private static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer("postgres:17.10-alpine")
@@ -270,7 +283,7 @@ class PostgresKnowledgeStoreIT {
         PostgresKeywordRetriever retriever = new PostgresKeywordRetriever(
                 new NamedParameterJdbcTemplate(dataSource)
         );
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal("tenant-a", "user-1"),
                 "Redis 超时",
@@ -306,7 +319,7 @@ class PostgresKnowledgeStoreIT {
         PostgresKeywordRetriever retriever = new PostgresKeywordRetriever(
                 new NamedParameterJdbcTemplate(dataSource)
         );
-        KnowledgeQuery query = new KnowledgeQuery(
+        KnowledgeQuery query = KnowledgeQuery.online(
                 UUID.randomUUID(),
                 principal("tenant-a", "user-without-access"),
                 "Redis timeout",
@@ -383,9 +396,11 @@ class PostgresKnowledgeStoreIT {
                 documentId,
                 revisionId,
                 List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, element.content().length(), null)),
                 0,
                 List.of("登录排障"),
                 element.content(),
+                "登录排障\n\n" + element.content(),
                 "d".repeat(64),
                 Map.of()
         );
@@ -399,7 +414,11 @@ class PostgresKnowledgeStoreIT {
                 document,
                 revision,
                 List.of(element),
-                List.of(chunk)
+                List.of(chunk),
+                null,
+                null,
+                1L,
+                PROCESSING_CONTRACT_FINGERPRINT
         );
 
         var first = writer.write(batch);
@@ -460,6 +479,58 @@ class PostgresKnowledgeStoreIT {
                 """, String.class, claimed.getFirst().id()));
     }
 
+    /** Space 固化合同缺失或不匹配时，解析结果都不得晚到发布。 */
+    @Test
+    void rejectsWriteWithoutMatchingDocumentProcessingConfig() {
+        String tenant = "tenant-processing-fence";
+        String space = "engineering";
+        seedTenantSpaceAndConnector(tenant, space);
+        DocumentId documentId = DocumentId.random();
+        KnowledgeWriteBatch source = batch(
+                tenant,
+                space,
+                documentId,
+                UUID.randomUUID(),
+                "e".repeat(64),
+                "profile-fence.md",
+                "配置版本围栏",
+                Instant.parse("2026-08-16T08:00:00Z")
+        );
+        jdbc.update("""
+                DELETE FROM space_document_processing_config
+                 WHERE tenant_id = ? AND space_id = ?
+                """, tenant, space);
+
+        assertThrows(
+                DocumentProcessingContractMismatchException.class,
+                () -> writer(Set.of()).write(source)
+        );
+        seedDocumentProcessingConfig(
+                tenant,
+                space,
+                Instant.parse("2026-08-16T08:00:00Z").atOffset(ZoneOffset.UTC)
+        );
+        var staleBatch = new KnowledgeWriteBatch(
+                source.document(),
+                source.revision(),
+                source.elements(),
+                source.chunks(),
+                source.sourceObject(),
+                source.connectorWriteFence(),
+                1L,
+                "f".repeat(64)
+        );
+
+        assertThrows(
+                DocumentProcessingContractMismatchException.class,
+                () -> writer(Set.of()).write(staleBatch)
+        );
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT count(*) FROM knowledge_document
+                 WHERE tenant_id = ? AND id = ?
+                """, Integer.class, tenant, documentId.value()));
+    }
+
     /**
      * Verifies immutable generation identity and durable vector projection status.
      */
@@ -484,7 +555,7 @@ class PostgresKnowledgeStoreIT {
                 new TenantId("tenant-a"),
                 new KnowledgeSpaceId("engineering"),
                 new EmbeddingSpec("zhipu", "embedding-3", 2048),
-                "v1",
+                IndexPhysicalContract.baseline("v1"),
                 "markdown-structure-v1",
                 "heading-aware-v1",
                 now
@@ -493,7 +564,7 @@ class PostgresKnowledgeStoreIT {
                 new TenantId("tenant-a"),
                 new KnowledgeSpaceId("engineering"),
                 new EmbeddingSpec("zhipu", "embedding-3", 2048),
-                "v1",
+                IndexPhysicalContract.baseline("v1"),
                 "markdown-structure-v1",
                 "heading-aware-v1",
                 now
@@ -517,6 +588,16 @@ class PostgresKnowledgeStoreIT {
         );
 
         assertEquals(first, second);
+        var activeGeneration = store.findActiveGeneration(
+                new TenantId("tenant-a"),
+                new KnowledgeSpaceId("engineering")
+        ).orElseThrow();
+        assertEquals(first, activeGeneration.generationId());
+        assertEquals(new KnowledgeSpaceId("engineering"), activeGeneration.spaceId());
+        assertEquals(jdbc.queryForObject("""
+                SELECT configuration_hash FROM index_generation
+                WHERE tenant_id = 'tenant-a' AND id = ?
+                """, String.class, first), activeGeneration.configurationVersion());
         assertEquals("ACTIVE", jdbc.queryForObject("""
                 SELECT status FROM index_generation
                 WHERE tenant_id = 'tenant-a' AND id = ?
@@ -681,7 +762,11 @@ class PostgresKnowledgeStoreIT {
                 changedDocument,
                 original.revision(),
                 original.elements(),
-                original.chunks()
+                original.chunks(),
+                original.sourceObject(),
+                original.connectorWriteFence(),
+                original.expectedDocumentProcessingConfigVersion(),
+                original.expectedDocumentProcessingContractFingerprint()
         )).changed());
         assertTrue(jdbc.queryForObject(
                 "SELECT requeue_requested FROM projection_job WHERE id = ?",
@@ -1009,7 +1094,11 @@ class PostgresKnowledgeStoreIT {
                 changedDocument,
                 original.revision(),
                 original.elements(),
-                original.chunks()
+                original.chunks(),
+                original.sourceObject(),
+                original.connectorWriteFence(),
+                original.expectedDocumentProcessingConfigVersion(),
+                original.expectedDocumentProcessingContractFingerprint()
         );
 
         var result = writer.write(updated);
@@ -1145,7 +1234,7 @@ class PostgresKnowledgeStoreIT {
                 source.document(), source.revision(), source.elements(), source.chunks(),
                 null, new ConnectorWriteFence(
                         new TenantId(tenant), runId, "worker-old", 1
-                )
+                ), 1L, PROCESSING_CONTRACT_FINGERPRINT
         );
 
         assertThrows(IllegalStateException.class, () -> writer(Set.of()).write(stale));
@@ -1158,7 +1247,7 @@ class PostgresKnowledgeStoreIT {
                 source.document(), source.revision(), source.elements(), source.chunks(),
                 null, new ConnectorWriteFence(
                         new TenantId(tenant), runId, "worker-new", 2
-                )
+                ), 1L, PROCESSING_CONTRACT_FINGERPRINT
         );
         assertTrue(writer(Set.of()).write(current).changed());
     }
@@ -1274,6 +1363,7 @@ class PostgresKnowledgeStoreIT {
                         'ACTIVE', ?, ?)
                 ON CONFLICT (tenant_id, id) DO NOTHING
                 """, databaseTime, databaseTime);
+        seedDocumentProcessingConfig("tenant-a", "engineering", databaseTime);
         jdbc.update("""
                 INSERT INTO knowledge_space_acl
                     (tenant_id, space_id, subject_type, subject_id,
@@ -1334,10 +1424,11 @@ class PostgresKnowledgeStoreIT {
         jdbc.update("""
                 INSERT INTO knowledge_chunk
                     (tenant_id, id, space_id, document_id, revision_id, ordinal,
-                     section_path_json, element_ids_json, content, content_hash,
-                     metadata_json, created_at)
+                     section_path_json, element_ids_json, content, contextual_text,
+                     content_hash, metadata_json, created_at)
                 VALUES ('tenant-a', ?, 'engineering', ?, ?, 0,
                         '["用户中心", "故障处理"]'::jsonb, '[]'::jsonb,
+                        'Redis 超时需要检查连接池和网络配置。',
                         'Redis 超时需要检查连接池和网络配置。', ?,
                         '{}'::jsonb, ?)
                 """, chunkId, documentId, revisionId, "b".repeat(64), databaseTime);
@@ -1380,6 +1471,7 @@ class PostgresKnowledgeStoreIT {
                 VALUES (?, ?, ?, 'ACTIVE', ?, ?)
                 ON CONFLICT (tenant_id, id) DO NOTHING
                 """, tenant, space, space, databaseTime, databaseTime);
+        seedDocumentProcessingConfig(tenant, space, databaseTime);
         jdbc.update("""
                 INSERT INTO connector_instance
                     (tenant_id, id, space_id, connector_type, display_name,
@@ -1473,13 +1565,65 @@ class PostgresKnowledgeStoreIT {
                 documentId,
                 revisionId,
                 List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of(externalId),
                 content,
+                externalId + "\n\n" + content,
                 contentHash,
                 Map.of()
         );
-        return new KnowledgeWriteBatch(document, revision, List.of(element), List.of(chunk));
+        return new KnowledgeWriteBatch(
+                document,
+                revision,
+                List.of(element),
+                List.of(chunk),
+                null,
+                null,
+                1L,
+                PROCESSING_CONTRACT_FINGERPRINT
+        );
+    }
+
+    /**
+     * 为写入用例建立最小且完整的 Space 固化处理合同。
+     *
+     * <p>测试批次必须通过与生产相同的版本和合同指纹栅栏，不能再依赖空值
+     * 跳过发布校验。</p>
+     */
+    private void seedDocumentProcessingConfig(
+            String tenant,
+            String space,
+            OffsetDateTime databaseTime
+    ) {
+        jdbc.update("""
+                INSERT INTO space_document_processing_config
+                    (tenant_id, space_id, parser_selections_json,
+                     cleaning_header_action, cleaning_footer_action,
+                     cleaning_page_number_action, cleaning_watermark_action,
+                     cleaning_front_matter_action, chunker_provider_id,
+                     tokenizer_id, minimum_tokens, target_tokens, maximum_tokens,
+                     overlap_tokens, chunker_provider_config_json,
+                     pipeline_contract, normalizer_schema_contract,
+                     parser_contracts_json, cleaner_contract, chunker_contract,
+                     processing_contract_fingerprint, version, updated_by,
+                     created_at, updated_at)
+                VALUES (?, ?, '{"text/markdown":"MARKDOWN_BUILTIN"}'::jsonb,
+                        'KEEP', 'KEEP', 'KEEP', 'KEEP', 'KEEP', 'STRUCTURAL',
+                        'unicode-code-point-v1', 64, 256, 512, 32, '{}'::jsonb,
+                        'source-normalize-parse-clean-chunk-write-v1',
+                        'source-normalizer-schema-v1',
+                        '{"text/markdown":"markdown-builtin-v1"}'::jsonb,
+                        'element-cleaner-v1', 'structural-chunker-v1',
+                        ?, 1, 'postgres-test-fixture', ?, ?)
+                ON CONFLICT (tenant_id, space_id) DO NOTHING
+                """,
+                tenant,
+                space,
+                PROCESSING_CONTRACT_FINGERPRINT,
+                databaseTime,
+                databaseTime
+        );
     }
 
     private PostgresKnowledgeWriter writer(Set<ProjectionType> projections) {

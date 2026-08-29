@@ -34,6 +34,28 @@ public final class DomainChecks {
     }
 
     /**
+     * 校验必须原样保留的非空文本，不规范化首尾空白。
+     *
+     * <p>Chunk 正文及其上下文化文本必须与 SourceSpan、内容哈希使用同一份字节语义；
+     * 如果在领域对象构造时再次 {@code strip}，引用范围与已计算指纹就会发生漂移。</p>
+     *
+     * @param value 原始字符串
+     * @param field 字段名称
+     * @param maxLength 最大允许长度
+     * @return 未改写的原字符串
+     */
+    public static String requiredVerbatimText(String value, String field, int maxLength) {
+        Objects.requireNonNull(value, field + " must not be null");
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(field + " must not be blank");
+        }
+        if (value.length() > maxLength) {
+            throw new IllegalArgumentException(field + " exceeds " + maxLength + " characters");
+        }
+        return value;
+    }
+
+    /**
      * 校验评分处于闭区间零到一之间。
      *
      * @param value 待校验评分
@@ -47,4 +69,3 @@ public final class DomainChecks {
         return value;
     }
 }
-

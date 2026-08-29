@@ -20,7 +20,9 @@ spring:
   servlet:
     multipart:
       max-file-size: 25MB
-      max-request-size: 26MB
+      # 业务正文总量仍由 extraction-runs.maximum-total-bytes 限制为 250MiB；
+      # 这里额外预留 Multipart 边界与请求头开销。
+      max-request-size: 251MB
       file-size-threshold: 0
   datasource:
     url: ${KNOWLEDGE_DB_URL:jdbc:postgresql://localhost:5433/infinity_knowledge}
@@ -59,6 +61,10 @@ infinity:
       allowed-origins: ${KNOWLEDGE_WEB_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
     retrieval:
       mode: standard
+      observation:
+        # 本地开发默认值只为开箱运行；生产环境必须由秘密管理系统覆盖并按版本轮换。
+        secret: ${KNOWLEDGE_RETRIEVAL_FINGERPRINT_SECRET:local-development-observation-key-change-before-production}
+        key-version: ${KNOWLEDGE_RETRIEVAL_FINGERPRINT_KEY_VERSION:local-v1}
       candidate-multiplier: 5
       rrf-constant: 60
       sufficient-threshold: 0.5
@@ -66,16 +72,99 @@ infinity:
       queue-capacity: 256
       request-timeout: 35s
       channel-timeout: 30s
+      space-router:
+        enabled: ${KNOWLEDGE_SPACE_ROUTER_ENABLED:false}
+        stage-timeout: ${KNOWLEDGE_SPACE_ROUTER_STAGE_TIMEOUT:4s}
+        endpoint: ${KNOWLEDGE_SPACE_ROUTER_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+        api-key: ${ZHIPU_API_KEY:}
+        model: ${KNOWLEDGE_SPACE_ROUTER_MODEL:glm-4.5-flash}
+        request-timeout: ${KNOWLEDGE_SPACE_ROUTER_REQUEST_TIMEOUT:3s}
+        max-attempts: ${KNOWLEDGE_SPACE_ROUTER_MAX_ATTEMPTS:1}
+        initial-backoff: ${KNOWLEDGE_SPACE_ROUTER_INITIAL_BACKOFF:0s}
+        max-input-characters: ${KNOWLEDGE_SPACE_ROUTER_MAX_INPUT_CHARACTERS:32000}
+        max-output-tokens: ${KNOWLEDGE_SPACE_ROUTER_MAX_OUTPUT_TOKENS:512}
+        proxy-host: ${KNOWLEDGE_SPACE_ROUTER_PROXY_HOST:}
+        proxy-port: ${KNOWLEDGE_SPACE_ROUTER_PROXY_PORT:0}
+      feedback-planner:
+        enabled: ${KNOWLEDGE_FEEDBACK_PLANNER_ENABLED:false}
+        stage-timeout: ${KNOWLEDGE_FEEDBACK_PLANNER_STAGE_TIMEOUT:4s}
+        endpoint: ${KNOWLEDGE_FEEDBACK_PLANNER_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+        api-key: ${ZHIPU_API_KEY:}
+        model: ${KNOWLEDGE_FEEDBACK_PLANNER_MODEL:glm-4.5-flash}
+        request-timeout: ${KNOWLEDGE_FEEDBACK_PLANNER_REQUEST_TIMEOUT:3s}
+        max-attempts: ${KNOWLEDGE_FEEDBACK_PLANNER_MAX_ATTEMPTS:1}
+        initial-backoff: ${KNOWLEDGE_FEEDBACK_PLANNER_INITIAL_BACKOFF:0s}
+        max-input-characters: ${KNOWLEDGE_FEEDBACK_PLANNER_MAX_INPUT_CHARACTERS:24000}
+        max-output-tokens: ${KNOWLEDGE_FEEDBACK_PLANNER_MAX_OUTPUT_TOKENS:512}
+        proxy-host: ${KNOWLEDGE_FEEDBACK_PLANNER_PROXY_HOST:}
+        proxy-port: ${KNOWLEDGE_FEEDBACK_PLANNER_PROXY_PORT:0}
+      coverage-judge:
+        enabled: ${KNOWLEDGE_COVERAGE_JUDGE_ENABLED:false}
+        stage-timeout: ${KNOWLEDGE_COVERAGE_JUDGE_STAGE_TIMEOUT:8s}
+        endpoint: ${KNOWLEDGE_COVERAGE_JUDGE_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/chat/completions}
+        api-key: ${ZHIPU_API_KEY:}
+        model: ${KNOWLEDGE_COVERAGE_JUDGE_MODEL:glm-4.5-flash}
+        request-timeout: ${KNOWLEDGE_COVERAGE_JUDGE_REQUEST_TIMEOUT:6s}
+        max-attempts: ${KNOWLEDGE_COVERAGE_JUDGE_MAX_ATTEMPTS:1}
+        initial-backoff: ${KNOWLEDGE_COVERAGE_JUDGE_INITIAL_BACKOFF:0s}
+        max-input-characters: ${KNOWLEDGE_COVERAGE_JUDGE_MAX_INPUT_CHARACTERS:120000}
+        max-output-tokens: ${KNOWLEDGE_COVERAGE_JUDGE_MAX_OUTPUT_TOKENS:2048}
+        proxy-host: ${KNOWLEDGE_COVERAGE_JUDGE_PROXY_HOST:}
+        proxy-port: ${KNOWLEDGE_COVERAGE_JUDGE_PROXY_PORT:0}
       reranker:
         enabled: ${KNOWLEDGE_RERANKER_ENABLED:false}
+        provider: ${KNOWLEDGE_RERANKER_PROVIDER:embedding}
+        stage-timeout: ${KNOWLEDGE_RERANKER_STAGE_TIMEOUT:4s}
         max-candidates: 24
         max-query-characters: 4096
-        max-candidate-characters: 8000
+        max-candidate-characters: 4096
         max-total-characters: 100000
+        zhipu:
+          endpoint: ${KNOWLEDGE_RERANKER_ENDPOINT:https://open.bigmodel.cn/api/paas/v4/rerank}
+          api-key: ${ZHIPU_API_KEY:}
+          model: ${KNOWLEDGE_RERANKER_MODEL:rerank}
+          request-timeout: ${KNOWLEDGE_RERANKER_REQUEST_TIMEOUT:3s}
+          max-attempts: ${KNOWLEDGE_RERANKER_MAX_ATTEMPTS:1}
+          initial-backoff: ${KNOWLEDGE_RERANKER_INITIAL_BACKOFF:0s}
+          proxy-host: ${KNOWLEDGE_RERANKER_PROXY_HOST:}
+          proxy-port: ${KNOWLEDGE_RERANKER_PROXY_PORT:0}
     ingestion:
-      target-chunk-characters: 1200
-      maximum-chunk-characters: 2000
+      tokenizer-id: ${KNOWLEDGE_CHUNK_TOKENIZER_ID:UTF8_BYTE_BUDGET}
+      minimum-chunk-tokens: ${KNOWLEDGE_CHUNK_MINIMUM_TOKENS:128}
+      target-chunk-tokens: ${KNOWLEDGE_CHUNK_TARGET_TOKENS:512}
+      maximum-chunk-tokens: ${KNOWLEDGE_CHUNK_MAXIMUM_TOKENS:1024}
+      overlap-chunk-tokens: ${KNOWLEDGE_CHUNK_OVERLAP_TOKENS:32}
       allowed-source-schemes: ${KNOWLEDGE_ALLOWED_SOURCE_SCHEMES:http,https,obsidian}
+      semantic-chunking:
+        enabled: ${KNOWLEDGE_SEMANTIC_CHUNKING_ENABLED:false}
+        maximum-embedding-inputs: 128
+        maximum-input-characters: 16000
+        maximum-candidates: 127
+        maximum-vector-values: 262144
+        stage-timeout: 12s
+      parsers:
+        docling:
+          enabled: ${KNOWLEDGE_DOCLING_PARSER_ENABLED:false}
+          # DOCX 必须单独通过固定部署 Golden；默认关闭时保留内置 POI Parser。
+          docx-enabled: ${KNOWLEDGE_DOCLING_DOCX_PARSER_ENABLED:false}
+          endpoint: ${KNOWLEDGE_DOCLING_ENDPOINT:http://localhost:5001}
+          api-key: ${KNOWLEDGE_DOCLING_API_KEY:}
+          # 固定 Docling Serve 镜像与模型包；升级会形成新的 parserVersion。
+          deployment-contract: ${KNOWLEDGE_DOCLING_DEPLOYMENT_CONTRACT:}
+          # 与 Docling Serve 返回的 schema_name/version 一致；升级时必须显式修改并重处理。
+          server-contract: ${KNOWLEDGE_DOCLING_SERVER_CONTRACT:}
+          connect-timeout: ${KNOWLEDGE_DOCLING_CONNECT_TIMEOUT:10s}
+          document-timeout: ${KNOWLEDGE_DOCLING_DOCUMENT_TIMEOUT:2m}
+          read-timeout: ${KNOWLEDGE_DOCLING_READ_TIMEOUT:130s}
+          maximum-concurrent-requests: ${KNOWLEDGE_DOCLING_MAXIMUM_CONCURRENT_REQUESTS:2}
+      tokenizers:
+        huggingface:
+          enabled: ${KNOWLEDGE_HUGGINGFACE_TOKENIZER_ENABLED:false}
+          id: ${KNOWLEDGE_HUGGINGFACE_TOKENIZER_ID:HUGGINGFACE_LOCAL}
+          model-profile-id: ${KNOWLEDGE_HUGGINGFACE_MODEL_PROFILE_ID:}
+          tokenizer-json: ${KNOWLEDGE_HUGGINGFACE_TOKENIZER_JSON:}
+          sha256: ${KNOWLEDGE_HUGGINGFACE_TOKENIZER_SHA256:}
+          add-special-tokens: ${KNOWLEDGE_HUGGINGFACE_ADD_SPECIAL_TOKENS:true}
       files:
         maximum-source-bytes: 26214400
         maximum-expanded-bytes: 104857600
@@ -84,6 +173,13 @@ infinity:
         maximum-text-characters: 10000000
         maximum-archive-entries: 10000
         maximum-compression-ratio: 100
+      extraction-runs:
+        maximum-files: ${KNOWLEDGE_EXTRACTION_MAXIMUM_FILES:10}
+        maximum-total-bytes: ${KNOWLEDGE_EXTRACTION_MAXIMUM_TOTAL_BYTES:262144000}
+        list-limit: ${KNOWLEDGE_EXTRACTION_LIST_LIMIT:50}
+        stale-after: ${KNOWLEDGE_EXTRACTION_STALE_AFTER:15m}
+        receiving-timeout: ${KNOWLEDGE_EXTRACTION_RECEIVING_TIMEOUT:30m}
+        poll-interval: ${KNOWLEDGE_EXTRACTION_POLL_INTERVAL:1s}
     object-storage:
       minio:
         endpoint: ${KNOWLEDGE_MINIO_ENDPOINT:http://localhost:9002}
@@ -142,6 +238,7 @@ infinity:
       initial-backoff: 2s
       max-backoff: 5m
     embedding:
+      enabled: ${KNOWLEDGE_EMBEDDING_ENABLED:false}
       provider: zhipu
       model: embedding-3
       dimensions: 2048

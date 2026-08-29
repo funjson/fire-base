@@ -14,6 +14,7 @@ import io.milvus.v2.service.vector.request.UpsertReq;
 import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.response.SearchResp;
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
@@ -34,11 +35,12 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Milvus 2.6 vector index with mandatory tenant and knowledge-space predicates.
+ * 使用 Milvus 2.6 实现的向量索引，所有查询强制包含租户和知识空间条件。
  */
 public final class MilvusVectorIndex implements VectorIndex {
 
-    private static final String SCHEMA_GENERATION = "metadata_v2";
+    // 增加来源范围字段后使用新集合，避免修改已存在的不可变 Milvus schema。
+    private static final String SCHEMA_GENERATION = "metadata_v3";
     private static final String ID = "id";
     private static final String TENANT_ID = "tenant_id";
     private static final String SPACE_ID = "space_id";
@@ -50,6 +52,7 @@ public final class MilvusVectorIndex implements VectorIndex {
     private static final String LANGUAGE = "language";
     private static final String SECTION_PATH = "section_path";
     private static final String CONTENT = "content";
+    private static final String SOURCE_SPANS = "source_spans";
     private static final String AUTHORITY = "authority";
     private static final String VECTOR = "vector";
     private static final List<String> OUTPUT_FIELDS = List.of(
@@ -63,6 +66,7 @@ public final class MilvusVectorIndex implements VectorIndex {
             LANGUAGE,
             SECTION_PATH,
             CONTENT,
+            SOURCE_SPANS,
             AUTHORITY
     );
 
@@ -73,11 +77,11 @@ public final class MilvusVectorIndex implements VectorIndex {
     private final Map<String, Boolean> ensuredCollections = new ConcurrentHashMap<>();
 
     /**
-     * Creates the adapter.
+     * 创建 Milvus 适配器。
      *
-     * @param client Milvus client
-     * @param collectionPrefix physical collection prefix
-     * @param partitionCount number of hash partitions for the tenant partition key
+     * @param client Milvus 客户端
+     * @param collectionPrefix 物理 Collection 前缀
+     * @param partitionCount 租户分区键的哈希分区数
      */
     public MilvusVectorIndex(
             MilvusClientV2 client,
@@ -194,6 +198,7 @@ public final class MilvusVectorIndex implements VectorIndex {
         schema.addField(field(LANGUAGE, DataType.VarChar, 32, false, false));
         schema.addField(field(SECTION_PATH, DataType.VarChar, 4_096, false, false));
         schema.addField(field(CONTENT, DataType.VarChar, 65_535, false, false));
+        schema.addField(field(SOURCE_SPANS, DataType.VarChar, 65_535, false, false));
         schema.addField(AddFieldReq.builder()
                 .fieldName(AUTHORITY)
                 .dataType(DataType.Int64)
@@ -262,6 +267,7 @@ public final class MilvusVectorIndex implements VectorIndex {
         chunk.sectionPath().forEach(path::add);
         row.addProperty(SECTION_PATH, path.toString());
         row.addProperty(CONTENT, chunk.content());
+        row.addProperty(SOURCE_SPANS, sourceSpansJson(chunk.sourceSpans()));
         row.addProperty(AUTHORITY, record.authority());
         JsonArray vector = new JsonArray();
         record.vector().forEach(vector::add);
@@ -361,7 +367,8 @@ public final class MilvusVectorIndex implements VectorIndex {
                         "authority", requiredString(entity, AUTHORITY),
                         "sourceType", requiredString(entity, SOURCE_TYPE),
                         "language", requiredString(entity, LANGUAGE)
-                )
+                ),
+                sourceSpans(requiredString(entity, SOURCE_SPANS))
         );
     }
 
@@ -381,6 +388,42 @@ public final class MilvusVectorIndex implements VectorIndex {
         List<String> values = new ArrayList<>(json.size());
         json.forEach(item -> values.add(item.getAsString()));
         return List.copyOf(values);
+    }
+
+    private static String sourceSpansJson(List<ChunkSourceSpan> spans) {
+        JsonArray values = new JsonArray();
+        for (ChunkSourceSpan span : spans) {
+            JsonObject value = new JsonObject();
+            value.addProperty("elementId", span.elementId().toString());
+            value.addProperty("startOffset", span.startOffset());
+            value.addProperty("endOffset", span.endOffset());
+            if (span.pageNumber() != null) {
+                value.addProperty("pageNumber", span.pageNumber());
+            }
+            values.add(value);
+        }
+        return values.toString();
+    }
+
+    private static List<ChunkSourceSpan> sourceSpans(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        JsonArray values = com.google.gson.JsonParser.parseString(value).getAsJsonArray();
+        List<ChunkSourceSpan> spans = new ArrayList<>(values.size());
+        for (var item : values) {
+            JsonObject span = item.getAsJsonObject();
+            Integer pageNumber = span.has("pageNumber") && !span.get("pageNumber").isJsonNull()
+                    ? span.get("pageNumber").getAsInt()
+                    : null;
+            spans.add(new ChunkSourceSpan(
+                    UUID.fromString(span.get("elementId").getAsString()),
+                    span.get("startOffset").getAsInt(),
+                    span.get("endOffset").getAsInt(),
+                    pageNumber
+            ));
+        }
+        return List.copyOf(spans);
     }
 
     private static String requiredString(Map<String, Object> values, String field) {

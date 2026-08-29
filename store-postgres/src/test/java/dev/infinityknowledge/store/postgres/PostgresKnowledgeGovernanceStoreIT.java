@@ -60,6 +60,52 @@ class PostgresKnowledgeGovernanceStoreIT {
     }
 
     @Test
+    void repeatedCreationReportsOriginalDefinitionWithoutMutatingGovernanceRows() {
+        PrincipalContext admin = admin("tenant-governance-repeat", "admin-repeat");
+        KnowledgeSpaceId spaceId = new KnowledgeSpaceId("engineering");
+        Instant now = Instant.parse("2026-08-03T00:00:00Z");
+
+        var created = store.createSpace(
+                admin,
+                spaceId,
+                "Engineering",
+                "Engineering knowledge space",
+                now
+        );
+        var repeated = store.createSpace(
+                admin,
+                spaceId,
+                "Renamed",
+                "Renamed knowledge space",
+                now.plusSeconds(30)
+        );
+
+        assertTrue(created.created());
+        assertFalse(repeated.created());
+        assertEquals("Engineering", repeated.name());
+        assertEquals("Engineering knowledge space", repeated.description());
+        assertEquals("ACTIVE", repeated.status());
+        assertEquals("Engineering", jdbc.queryForObject("""
+                SELECT name
+                  FROM knowledge_space
+                 WHERE tenant_id = ?
+                   AND id = ?
+                """, String.class, admin.tenantId().value(), spaceId.value()));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM knowledge_space_acl
+                 WHERE tenant_id = ?
+                   AND space_id = ?
+                """, Integer.class, admin.tenantId().value(), spaceId.value()));
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT count(*)
+                  FROM connector_instance
+                 WHERE tenant_id = ?
+                   AND space_id = ?
+                """, Integer.class, admin.tenantId().value(), spaceId.value()));
+    }
+
+    @Test
     void registersPrincipalAndAppliesRoleGrantWithoutCrossTenantLeakage() {
         PrincipalContext adminA = admin("tenant-governance-a", "admin-a");
         PrincipalContext readerA = reader("tenant-governance-a", "reader-a");
@@ -67,9 +113,27 @@ class PostgresKnowledgeGovernanceStoreIT {
         PrincipalContext readerB = reader("tenant-governance-b", "reader-b");
         Instant now = Instant.parse("2026-08-03T00:00:00Z");
 
-        store.createSpace(adminA, new KnowledgeSpaceId("engineering"), "Engineering", now);
-        store.createSpace(adminA, new KnowledgeSpaceId("private"), "Private", now);
-        store.createSpace(adminB, new KnowledgeSpaceId("engineering"), "Other tenant", now);
+        store.createSpace(
+                adminA,
+                new KnowledgeSpaceId("engineering"),
+                "Engineering",
+                "Engineering knowledge space",
+                now
+        );
+        store.createSpace(
+                adminA,
+                new KnowledgeSpaceId("private"),
+                "Private",
+                "Private knowledge space",
+                now
+        );
+        store.createSpace(
+                adminB,
+                new KnowledgeSpaceId("engineering"),
+                "Other tenant",
+                "Other tenant knowledge space",
+                now
+        );
         store.ensurePrincipal(readerA, now);
         store.ensurePrincipal(readerB, now);
 
@@ -136,8 +200,20 @@ class PostgresKnowledgeGovernanceStoreIT {
     void provisioningUsesSpaceScopedApiConnectorAndDoesNotReactivateSuspendedPrincipal() {
         PrincipalContext admin = admin("tenant-governance-c", "admin-c");
         Instant now = Instant.parse("2026-08-03T00:00:00Z");
-        store.createSpace(admin, new KnowledgeSpaceId("one"), "One", now);
-        store.createSpace(admin, new KnowledgeSpaceId("two"), "Two", now);
+        store.createSpace(
+                admin,
+                new KnowledgeSpaceId("one"),
+                "One",
+                "First API connector test space",
+                now
+        );
+        store.createSpace(
+                admin,
+                new KnowledgeSpaceId("two"),
+                "Two",
+                "Second API connector test space",
+                now
+        );
 
         Integer connectorCount = jdbc.queryForObject("""
                 SELECT count(*)

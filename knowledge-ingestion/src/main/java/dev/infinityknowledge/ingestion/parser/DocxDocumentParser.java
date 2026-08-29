@@ -17,10 +17,10 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** DOCX parser with archive-bomb preflight and document-order structure extraction. */
+/** 具备压缩炸弹预检并按文档顺序提取结构的 DOCX Parser。 */
 public final class DocxDocumentParser implements DocumentParser {
 
-    /** Current parser contract version. */
+    /** 当前 Parser 契约版本。 */
     public static final String VERSION = "poi-docx-structure-v1";
 
     private static final Pattern HEADING_STYLE = Pattern.compile(
@@ -39,6 +39,11 @@ public final class DocxDocumentParser implements DocumentParser {
     }
 
     @Override
+    public String canonicalMediaType() {
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }
+
+    @Override
     public Set<String> supportedMediaTypes() {
         return Set.of("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
@@ -48,10 +53,20 @@ public final class DocxDocumentParser implements DocumentParser {
         return Set.of(".docx");
     }
 
+    /** DOCX 解析保留标题路径；表格当前只保证提供扁平检索文本。 */
+    @Override
+    public Set<ParserOutputCapability> outputCapabilities() {
+        return Set.of(
+                ParserOutputCapability.STANDARD_ELEMENTS,
+                ParserOutputCapability.HIERARCHY,
+                ParserOutputCapability.FLAT_TABLE_TEXT
+        );
+    }
+
     @Override
     public ParsedDocument parse(DocumentParseInput input) {
         byte[] source = input.sourceBytes();
-        OfficeArchiveGuard.verify(source, input.limits());
+        OpenXmlPackageGuard.verify(source, input.limits());
         try (XWPFDocument document = new XWPFDocument(new java.io.ByteArrayInputStream(source))) {
             ElementAccumulator elements = new ElementAccumulator(input.revisionId(), input.limits());
             for (IBodyElement bodyElement : document.getBodyElements()) {

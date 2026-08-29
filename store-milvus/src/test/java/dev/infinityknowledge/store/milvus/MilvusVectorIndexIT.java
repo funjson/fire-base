@@ -5,6 +5,7 @@ import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.service.collection.request.DropCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.document.DocumentStatus;
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
 import dev.infinityknowledge.domain.document.KnowledgeDocument;
@@ -461,16 +462,19 @@ class MilvusVectorIndexIT {
         UUID chunkId = UUID.nameUUIDFromBytes(
                 (revisionId + ":0").getBytes(StandardCharsets.UTF_8)
         );
+        UUID elementId = UUID.nameUUIDFromBytes(content.getBytes(StandardCharsets.UTF_8));
         return new KnowledgeChunk(
                 chunkId,
                 tenantId,
                 spaceId,
                 documentId,
                 revisionId,
-                List.of(UUID.nameUUIDFromBytes(content.getBytes(StandardCharsets.UTF_8))),
+                List.of(elementId),
+                List.of(new ChunkSourceSpan(elementId, 0, content.length(), null)),
                 0,
                 List.of("Test"),
                 content,
+                "Test\n\n" + content,
                 "hash-" + content,
                 Map.of()
         );

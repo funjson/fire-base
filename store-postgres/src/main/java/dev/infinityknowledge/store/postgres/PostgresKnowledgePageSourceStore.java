@@ -1,6 +1,7 @@
 package dev.infinityknowledge.store.postgres;
 
 import dev.infinityknowledge.domain.document.KnowledgeChunk;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.space.KnowledgeSpaceId;
 import dev.infinityknowledge.spi.wiki.KnowledgePageSourceStore;
@@ -57,7 +58,8 @@ public final class PostgresKnowledgePageSourceStore implements KnowledgePageSour
                 SELECT c.id, c.document_id, c.revision_id, c.ordinal,
                        c.element_ids_json::text AS element_ids_json,
                        c.section_path_json::text AS section_path_json,
-                       c.content, c.content_hash,
+                       c.content, c.contextual_text, c.content_hash,
+                       c.source_spans_json::text AS source_spans_json,
                        c.metadata_json::text AS metadata_json,
                        d.authority
                   FROM knowledge_chunk c
@@ -77,9 +79,11 @@ public final class PostgresKnowledgePageSourceStore implements KnowledgePageSour
                         selection.documentId(),
                         row.getObject("revision_id", UUID.class),
                         uuidList(row.getString("element_ids_json")),
+                        sourceSpans(row.getString("source_spans_json")),
                         row.getInt("ordinal"),
                         stringList(row.getString("section_path_json")),
                         row.getString("content"),
+                        row.getString("contextual_text"),
                         row.getString("content_hash"),
                         stringMap(row.getString("metadata_json"))
                 ),
@@ -109,6 +113,14 @@ public final class PostgresKnowledgePageSourceStore implements KnowledgePageSour
             return jsonMapper.readValue(json, new TypeReference<Map<String, String>>() { });
         } catch (RuntimeException failure) {
             throw new IllegalStateException("stored page source metadata is invalid", failure);
+        }
+    }
+
+    private List<ChunkSourceSpan> sourceSpans(String json) {
+        try {
+            return jsonMapper.readValue(json, new TypeReference<List<ChunkSourceSpan>>() { });
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("stored page source spans are invalid", failure);
         }
     }
 }

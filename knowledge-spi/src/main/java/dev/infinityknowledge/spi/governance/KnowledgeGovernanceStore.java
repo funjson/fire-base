@@ -23,14 +23,34 @@ public interface KnowledgeGovernanceStore {
     void ensurePrincipal(PrincipalContext principal, Instant now);
 
     /**
-     * 幂等创建知识空间，并为创建者授予管理员权限。
+     * 仅在空间不存在时创建知识空间，并为创建者授予管理员权限。
+     *
+     * <p>已存在时不得修改名称、状态、ACL 或 Connector；应用层需要先比较该
+     * Space 已固化的处理配置，再决定把重复请求视为幂等成功还是冲突。</p>
      */
-    void createSpace(
+    CreateSpaceResult createSpace(
             PrincipalContext principal,
             KnowledgeSpaceId spaceId,
             String name,
+            String description,
             Instant now
     );
+
+    /**
+     * 空间治理部分的创建结果；重复请求返回原有名称和状态供应用层严格校验。
+     */
+    record CreateSpaceResult(
+            boolean created,
+            String name,
+            String description,
+            String status
+    ) {
+        public CreateSpaceResult {
+            name = requireText(name, "name");
+            description = requireText(description, "description");
+            status = requireText(status, "status");
+        }
+    }
 
     /**
      * 返回当前主体可以读取的活动知识空间。
@@ -96,6 +116,7 @@ public interface KnowledgeGovernanceStore {
             String status,
             long version,
             long documentCount,
+            Instant createdAt,
             Instant updatedAt
     ) {
         public AccessibleSpace {
@@ -103,6 +124,7 @@ public interface KnowledgeGovernanceStore {
             name = requireText(name, "name");
             description = Objects.requireNonNull(description, "description must not be null");
             status = requireText(status, "status");
+            Objects.requireNonNull(createdAt, "createdAt must not be null");
             Objects.requireNonNull(updatedAt, "updatedAt must not be null");
         }
     }

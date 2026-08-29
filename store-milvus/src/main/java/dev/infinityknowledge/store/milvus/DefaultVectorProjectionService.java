@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Generates chunk embeddings and publishes one immutable revision to Milvus.
+ * 生成 Chunk 向量，并向 Milvus 发布一个不可变修订。
  */
 public final class DefaultVectorProjectionService implements VectorProjectionService {
 
@@ -26,7 +26,7 @@ public final class DefaultVectorProjectionService implements VectorProjectionSer
     private final ActiveRevisionGuard activeRevisionGuard;
 
     /**
-     * Creates the projection service.
+     * 创建向量投影服务。
      */
     public DefaultVectorProjectionService(
             EmbeddingProvider embeddingProvider,
@@ -63,7 +63,8 @@ public final class DefaultVectorProjectionService implements VectorProjectionSer
             return;
         }
         List<EmbeddingVector> vectors = embeddingProvider.embed(
-                chunks.stream().map(KnowledgeChunk::content).toList(),
+                // 标题路径只影响语义向量；展示、引用和关键词仍读取原始 content。
+                chunks.stream().map(KnowledgeChunk::contextualText).toList(),
                 embeddingSpec
         );
         List<VectorIndexRecord> records = new ArrayList<>(chunks.size());
@@ -81,7 +82,7 @@ public final class DefaultVectorProjectionService implements VectorProjectionSer
                     vector.values()
             ));
         }
-        // Embedding is the slow part of projection, so the document head may have changed.
+        // 向量化是慢步骤；完成时文档活动修订可能已经切换，需要再次守卫。
         if (!activeRevisionGuard.isActive(document.tenantId(), document.id(), revisionId)) {
             return;
         }

@@ -55,7 +55,8 @@ public record KnowledgeSearchResponse(
             UUID chunkId,
             String title,
             List<String> sectionPath,
-            String sourceUri
+            String sourceUri,
+            List<SourceSpan> sourceSpans
     ) {
         public Citation {
             documentId = requireText(documentId, "documentId");
@@ -66,6 +67,31 @@ public record KnowledgeSearchResponse(
                     Objects.requireNonNull(sectionPath, "sectionPath must not be null")
             );
             sourceUri = requireText(sourceUri, "sourceUri");
+            sourceSpans = List.copyOf(Objects.requireNonNull(
+                    sourceSpans,
+                    "sourceSpans must not be null"
+            ));
+        }
+
+        /** 兼容旧服务端未提供逐元素高亮范围的响应。 */
+        public Citation(
+                String documentId, UUID revisionId, UUID chunkId, String title,
+                List<String> sectionPath, String sourceUri
+        ) {
+            this(documentId, revisionId, chunkId, title, sectionPath, sourceUri, List.of());
+        }
+    }
+
+    /** 供 Agent 或前端跳转到原文精确位置的范围。 */
+    public record SourceSpan(UUID elementId, int startOffset, int endOffset, Integer pageNumber) {
+        public SourceSpan {
+            Objects.requireNonNull(elementId, "elementId must not be null");
+            if (startOffset < 0 || endOffset <= startOffset) {
+                throw new IllegalArgumentException("source span offsets are invalid");
+            }
+            if (pageNumber != null && pageNumber < 1) {
+                throw new IllegalArgumentException("pageNumber must be positive when present");
+            }
         }
     }
 

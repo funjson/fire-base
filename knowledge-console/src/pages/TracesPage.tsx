@@ -23,8 +23,8 @@ export function TracesPage() {
       <div className="page-intro">
         <div>
           <span className="eyebrow">SAFE OBSERVABILITY</span>
-          <h2>追踪检索阶段，不记录企业知识正文</h2>
-          <p>Trace 仅保存身份、哈希、数量、耗时和状态，支持性能与质量诊断。</p>
+          <h2>监控检索阶段，不记录企业知识正文</h2>
+          <p>监控数据仅保存身份、哈希、数量、耗时和状态，支持性能与质量诊断。</p>
         </div>
       </div>
       <Panel>

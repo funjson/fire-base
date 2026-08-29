@@ -70,35 +70,48 @@ public class PostgresKnowledgeGovernanceStore
 
     @Override
     @Transactional
-    public void createSpace(
+    public CreateSpaceResult createSpace(
             PrincipalContext principal,
             KnowledgeSpaceId spaceId,
             String name,
+            String description,
             Instant now
     ) {
         Objects.requireNonNull(spaceId, "spaceId must not be null");
         Objects.requireNonNull(name, "name must not be null");
+        Objects.requireNonNull(description, "description must not be null");
         ensurePrincipal(principal, now);
         var parameters = principalParameters(principal, now)
                 .addValue("spaceId", spaceId.value())
                 .addValue("name", name.strip())
+                .addValue("description", description.strip())
                 .addValue("connectorId", "api-upload:" + spaceId.value());
-        jdbc.update("""
+        int created = jdbc.update("""
                 INSERT INTO knowledge_space
-                    (tenant_id, id, name, status, created_at, updated_at)
-                VALUES (:tenantId, :spaceId, :name, 'ACTIVE', :now, :now)
-                ON CONFLICT (tenant_id, id) DO UPDATE
-                SET name = EXCLUDED.name,
-                    status = 'ACTIVE',
-                    updated_at = EXCLUDED.updated_at
+                    (tenant_id, id, name, description, status, created_at, updated_at)
+                VALUES (:tenantId, :spaceId, :name, :description, 'ACTIVE', :now, :now)
+                ON CONFLICT (tenant_id, id) DO NOTHING
                 """, parameters);
+        if (created == 0) {
+            return jdbc.queryForObject("""
+                    SELECT name, description, status
+                      FROM knowledge_space
+                     WHERE tenant_id = :tenantId
+                       AND id = :spaceId
+                     FOR UPDATE
+                    """, parameters, (row, number) -> new CreateSpaceResult(
+                    false,
+                    row.getString("name"),
+                    row.getString("description"),
+                    row.getString("status")
+            ));
+        }
         jdbc.update("""
                 INSERT INTO knowledge_space_acl
                     (tenant_id, space_id, subject_type, subject_id,
                      permission, granted_by, created_at)
                 VALUES (:tenantId, :spaceId, 'USER', :principalId,
                         'ADMIN', :principalId, :now)
-                ON CONFLICT DO NOTHING
                 """, parameters);
         jdbc.update("""
                 INSERT INTO connector_instance
@@ -106,11 +119,13 @@ public class PostgresKnowledgeGovernanceStore
                      config_json, status, created_at, updated_at)
                 VALUES (:tenantId, :connectorId, :spaceId, 'API', 'API Upload',
                         '{}'::jsonb, 'ACTIVE', :now, :now)
-                ON CONFLICT (tenant_id, id) DO UPDATE
-                SET space_id = EXCLUDED.space_id,
-                    status = 'ACTIVE',
-                    updated_at = EXCLUDED.updated_at
                 """, parameters);
+        return new CreateSpaceResult(
+                true,
+                name.strip(),
+                description.strip(),
+                "ACTIVE"
+        );
     }
 
     @Override
@@ -152,7 +167,8 @@ public class PostgresKnowledgeGovernanceStore
                    )
                 """;
         return jdbc.query("""
-                SELECT s.id, s.name, s.description, s.status, s.version, s.updated_at,
+                SELECT s.id, s.name, s.description, s.status, s.version,
+                       s.created_at, s.updated_at,
                        count(d.id) FILTER (WHERE d.status <> 'DELETED') AS document_count
                   FROM knowledge_space s
                   JOIN knowledge_tenant t
@@ -162,7 +178,8 @@ public class PostgresKnowledgeGovernanceStore
                     ON d.tenant_id = s.tenant_id
                    AND d.space_id = s.id
                 """ + authorization + """
-                 GROUP BY s.id, s.name, s.description, s.status, s.version, s.updated_at
+                 GROUP BY s.id, s.name, s.description, s.status, s.version,
+                          s.created_at, s.updated_at
                  ORDER BY s.name, s.id
                 """, parameters, (row, number) -> accessibleSpace(row));
     }
@@ -265,6 +282,7 @@ public class PostgresKnowledgeGovernanceStore
                 row.getString("status"),
                 row.getLong("version"),
                 row.getLong("document_count"),
+                row.getObject("created_at", OffsetDateTime.class).toInstant(),
                 row.getObject("updated_at", OffsetDateTime.class).toInstant()
         );
     }

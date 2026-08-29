@@ -21,10 +21,13 @@
     <modules>
         <module>knowledge-domain</module>
         <module>knowledge-spi</module>
+        <module>knowledge-retrieval</module>
         <module>knowledge-runtime</module>
         <module>knowledge-agent-client</module>
         <module>knowledge-evaluation</module>
         <module>knowledge-ingestion</module>
+        <module>parser-docling</module>
+        <module>tokenizer-huggingface</module>
         <module>knowledge-compiler</module>
         <module>connector-obsidian</module>
         <module>provider-zhipu</module>
@@ -33,6 +36,7 @@
         <module>store-elasticsearch</module>
         <module>store-neo4j</module>
         <module>store-minio</module>
+        <module>knowledge-jobs</module>
         <module>control-plane</module>
     </modules>
 

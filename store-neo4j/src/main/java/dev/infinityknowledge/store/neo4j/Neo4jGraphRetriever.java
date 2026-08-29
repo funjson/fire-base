@@ -9,6 +9,7 @@ import dev.infinityknowledge.spi.graph.GraphQuery;
 import dev.infinityknowledge.spi.graph.GraphStore;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
+import dev.infinityknowledge.spi.retrieval.RetrievalComponentVersion;
 import dev.infinityknowledge.spi.retrieval.Retriever;
 
 import java.util.ArrayList;
@@ -49,6 +50,17 @@ public final class Neo4jGraphRetriever implements Retriever {
     @Override
     public RetrievalChannel channel() {
         return RetrievalChannel.GRAPH;
+    }
+
+    /** 返回 Neo4j 有界图遍历 Retriever 的稳定执行合同。 */
+    @Override
+    public RetrievalComponentVersion componentVersion() {
+        return new RetrievalComponentVersion(
+                "retriever-graph",
+                "neo4j",
+                "bounded-traversal",
+                "v1"
+        );
     }
 
     @Override

@@ -11,13 +11,39 @@ spring:
   flyway:
     enabled: true
 
+# 验收日志同时写入滚动文件，避免 IDE Console 截断后丢失 requestId 关联证据。
+logging:
+  file:
+    name: ${KNOWLEDGE_LOG_FILE:logs/infinity-knowledge-acceptance.log}
+  logback:
+    rollingpolicy:
+      max-file-size: ${KNOWLEDGE_LOG_MAX_FILE_SIZE:20MB}
+      max-history: ${KNOWLEDGE_LOG_MAX_HISTORY:14}
+      total-size-cap: ${KNOWLEDGE_LOG_TOTAL_SIZE_CAP:512MB}
+
 infinity:
   knowledge:
+    ingestion:
+      semantic-chunking:
+        enabled: ${KNOWLEDGE_SEMANTIC_CHUNKING_ENABLED:true}
     retrieval:
       mode: hybrid
+      observation:
+        # 受控验收与生产不允许使用本地默认密钥。
+        secret: ${KNOWLEDGE_RETRIEVAL_FINGERPRINT_SECRET}
+        key-version: ${KNOWLEDGE_RETRIEVAL_FINGERPRINT_KEY_VERSION}
+      feedback-planner:
+        enabled: ${KNOWLEDGE_FEEDBACK_PLANNER_ENABLED:true}
+        proxy-host: ${KNOWLEDGE_FEEDBACK_PLANNER_PROXY_HOST:127.0.0.1}
+        proxy-port: ${KNOWLEDGE_FEEDBACK_PLANNER_PROXY_PORT:7890}
       reranker:
         enabled: ${KNOWLEDGE_RERANKER_ENABLED:true}
+        provider: ${KNOWLEDGE_RERANKER_PROVIDER:zhipu}
+        zhipu:
+          proxy-host: ${KNOWLEDGE_RERANKER_PROXY_HOST:127.0.0.1}
+          proxy-port: ${KNOWLEDGE_RERANKER_PROXY_PORT:7890}
     embedding:
+      enabled: true
       api-key: ${ZHIPU_API_KEY}
       proxy-host: ${KNOWLEDGE_EMBEDDING_PROXY_HOST:127.0.0.1}
       proxy-port: ${KNOWLEDGE_EMBEDDING_PROXY_PORT:7890}

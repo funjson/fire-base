@@ -1,0 +1,5 @@
+第一段需要保留。
+
+Second paragraph must stay together.
+
+最后一段用于验证纯文本范围。

@@ -44,6 +44,20 @@ class RuntimeConfigurationContractTest {
         )).isEqualTo(true);
         assertThat(source.getProperty("infinity.knowledge.embedding.api-key"))
                 .isEqualTo("${ZHIPU_API_KEY}");
+        assertThat(source.getProperty("logging.file.name"))
+                .isEqualTo(
+                        "${KNOWLEDGE_LOG_FILE:"
+                                + "logs/infinity-knowledge-acceptance.log}"
+                );
+        assertThat(source.getProperty(
+                "logging.logback.rollingpolicy.max-file-size"
+        )).isEqualTo("${KNOWLEDGE_LOG_MAX_FILE_SIZE:20MB}");
+        assertThat(source.getProperty(
+                "logging.logback.rollingpolicy.max-history"
+        )).isEqualTo("${KNOWLEDGE_LOG_MAX_HISTORY:14}");
+        assertThat(source.getProperty(
+                "logging.logback.rollingpolicy.total-size-cap"
+        )).isEqualTo("${KNOWLEDGE_LOG_TOTAL_SIZE_CAP:512MB}");
     }
 
     @Test

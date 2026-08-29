@@ -1,6 +1,7 @@
 package dev.infinityknowledge.store.elasticsearch;
 
 import dev.infinityknowledge.domain.document.DocumentId;
+import dev.infinityknowledge.domain.document.ChunkSourceSpan;
 import dev.infinityknowledge.domain.identity.TenantId;
 import dev.infinityknowledge.domain.retrieval.RetrievalCandidate;
 import dev.infinityknowledge.domain.retrieval.RetrievalChannel;
@@ -9,6 +10,7 @@ import dev.infinityknowledge.spi.keyword.KeywordIndex;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionCandidates;
 import dev.infinityknowledge.spi.indexing.ActiveRevisionGuard;
 import dev.infinityknowledge.spi.indexing.ProjectionSource;
+import dev.infinityknowledge.spi.retrieval.RetrievalComponentVersion;
 import dev.infinityknowledge.spi.retrieval.RetrievalRequest;
 import dev.infinityknowledge.spi.retrieval.Retriever;
 import tools.jackson.core.JacksonException;
@@ -21,9 +23,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,7 +36,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Idempotent Elasticsearch projection and ACL-aware keyword retriever.
+ * 幂等写入 Elasticsearch，并提供按 ACL 过滤的关键词检索。
  */
 public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever {
 
@@ -59,6 +64,7 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
                   },
                   "section_path": {"type": "text", "analyzer": "knowledge_cjk"},
                   "content": {"type": "text", "analyzer": "knowledge_cjk"},
+                  "source_spans": {"type": "keyword", "index": false},
                   "source_uri": {"type": "keyword", "index": false},
                   "source_type": {"type": "keyword"},
                   "language": {"type": "keyword"},
@@ -68,6 +74,23 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
             }
             """;
 
+    /**
+     * 对既有 strict mapping 的最小增量升级。新增字段在 Elasticsearch 中幂等，
+     * 因而不需要删除历史索引或停机重建。
+     */
+    private static final String SOURCE_SPANS_MAPPING = """
+            {
+              "properties": {
+                "source_spans": {"type": "keyword", "index": false}
+              }
+            }
+            """;
+    private static final String MAPPING_CONTRACT_FINGERPRINT = sha256(String.join(
+            "\u001F",
+            MAPPING,
+            SOURCE_SPANS_MAPPING
+    ));
+
     private final HttpClient httpClient;
     private final JsonMapper jsonMapper;
     private final ElasticsearchConfig config;
@@ -75,7 +98,7 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
     private final AtomicBoolean indexReady = new AtomicBoolean();
 
     /**
-     * Creates the adapter.
+     * 创建 Elasticsearch 适配器。
      */
     public ElasticsearchKeywordIndex(
             HttpClient httpClient,
@@ -97,14 +120,54 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
         return RetrievalChannel.KEYWORD;
     }
 
+    /** 返回 Elasticsearch BM25 与 CJK 分词合同的稳定组件版本。 */
+    @Override
+    public RetrievalComponentVersion componentVersion() {
+        return new RetrievalComponentVersion(
+                "retriever-keyword",
+                "elasticsearch",
+                "bm25-cjk",
+                "v1"
+        );
+    }
+
     /**
-     * Verifies connectivity and creates the configured index when it is absent.
+     * 校验连通性；不存在时创建配置的索引。
      *
-     * <p>This is used by strict runtime profiles so a missing Elasticsearch
-     * channel is reported during startup instead of on the first query.</p>
+     * <p>严格运行配置借此在启动阶段暴露缺失的 Elasticsearch 通道，避免第一次
+     * 查询才失败。</p>
      */
     public void ensureReady() {
         ensureIndex();
+    }
+
+    /**
+     * 返回当前实际索引名与完整映射内容的稳定指纹。
+     *
+     * <p>调用方把该值写入统一索引代际合同；修改索引名、分词配置或字段映射后，旧活动
+     * 代际将无法继续通过检索前校验。指纹不包含端点与认证信息。</p>
+     */
+    public String physicalTargetFingerprint() {
+        return physicalTargetFingerprint(
+                config.indexName(),
+                MAPPING_CONTRACT_FINGERPRINT
+        );
+    }
+
+    /** 包级测试入口：证明索引名和映射指纹任一变化都会切换物理目标。 */
+    static String physicalTargetFingerprint(
+            String indexName,
+            String mappingContractFingerprint
+    ) {
+        return sha256(String.join(
+                "\u001F",
+                "elasticsearch-keyword-v1",
+                Objects.requireNonNull(indexName, "indexName must not be null"),
+                Objects.requireNonNull(
+                        mappingContractFingerprint,
+                        "mappingContractFingerprint must not be null"
+                )
+        ));
     }
 
     @Override
@@ -140,6 +203,7 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
             document.put("title", source.document().title());
             document.put("section_path", String.join(" / ", chunk.sectionPath()));
             document.put("content", chunk.content());
+            document.put("source_spans", json(chunk.sourceSpans()));
             document.put("source_uri", source.document().source().uri());
             document.put("source_type", source.document().source().type().name());
             document.put(
@@ -162,8 +226,8 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
         if (response.path("errors").asBoolean(true)) {
             throw new ElasticsearchStoreException("Elasticsearch bulk projection failed");
         }
-        // Revisions are immutable. Deleting "all other revisions" here is unsafe because an
-        // older worker may finish after the active worker. PostgreSQL filters reads by the head.
+        // 修订不可变；旧 Worker 可能晚于新 Worker 完成，因此此处删除“所有其他修订”不安全。
+        // PostgreSQL 读取时会按活动修订头过滤。
     }
 
     @Override
@@ -218,7 +282,7 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
                 "track_total_hits", false,
                 "_source", List.of(
                         "tenant_id", "space_id", "document_id", "revision_id",
-                        "chunk_id", "title", "section_path", "content",
+                        "chunk_id", "title", "section_path", "content", "source_spans",
                         "source_uri", "authority"
                 ),
                 "query", Map.of("bool", bool)
@@ -255,7 +319,8 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
                     Map.of(
                             "retriever", "elasticsearch",
                             "authority", source.path("authority").asString("0")
-                    )
+                    ),
+                    sourceSpans(optionalText(source.path("source_spans")))
             ));
         }
         return List.copyOf(candidates);
@@ -291,7 +356,20 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
             } else if (head.statusCode() < 200 || head.statusCode() >= 300) {
                 throw httpFailure("inspect index", head.statusCode());
             }
+            ensureSourceSpansMapping();
             indexReady.set(true);
+        }
+    }
+
+    private void ensureSourceSpansMapping() {
+        HttpResponse<String> response = rawExchange(
+                "PUT",
+                "/" + config.indexName() + "/_mapping",
+                SOURCE_SPANS_MAPPING,
+                "application/json"
+        );
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw httpFailure("upgrade source span mapping", response.statusCode());
         }
     }
 
@@ -390,6 +468,25 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
         return List.of(value.split(" / ", -1));
     }
 
+    private static String optionalText(JsonNode value) {
+        return value.isMissingNode() || value.isNull() ? "" : value.asString();
+    }
+
+    /** 反序列化仅用于回传引用范围，不参与查询或日志。 */
+    private List<ChunkSourceSpan> sourceSpans(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        try {
+            return jsonMapper.readValue(
+                    value,
+                    new tools.jackson.core.type.TypeReference<List<ChunkSourceSpan>>() { }
+            );
+        } catch (JacksonException failure) {
+            throw new ElasticsearchStoreException("Elasticsearch source spans are invalid", failure);
+        }
+    }
+
     private static double normalize(double score, double maxScore) {
         if (score <= 0.0 || maxScore <= 0.0) {
             return 0.0;
@@ -407,5 +504,16 @@ public final class ElasticsearchKeywordIndex implements KeywordIndex, Retriever 
         return new ElasticsearchStoreException(
                 "Elasticsearch " + action + " failed with HTTP " + statusCode
         );
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(value.getBytes(StandardCharsets.UTF_8))
+            );
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 is unavailable", unavailable);
+        }
     }
 }
