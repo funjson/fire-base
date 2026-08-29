@@ -108,6 +108,27 @@ public final class PostgresMetricFactStore implements MetricFactStore {
                         MetricDimensions.Key.DATA_INDEX_VERSION
                 ))
                 .addValue("status", dimensions.require(MetricDimensions.Key.STATUS))
+                .addValue("technicalStatus", dimensions.require(
+                        MetricDimensions.Key.TECHNICAL_STATUS
+                ))
+                .addValue("terminalStatus", optional(
+                        dimensions,
+                        MetricDimensions.Key.TERMINAL_STATUS
+                ))
+                .addValue("stage", optional(dimensions, MetricDimensions.Key.STAGE))
+                .addValue("visitIndex", optionalInteger(
+                        dimensions,
+                        MetricDimensions.Key.VISIT_INDEX
+                ))
+                .addValue("channel", optional(dimensions, MetricDimensions.Key.CHANNEL))
+                .addValue("chainNode", optional(
+                        dimensions,
+                        MetricDimensions.Key.CHAIN_NODE
+                ))
+                .addValue("coverageStatus", optional(
+                        dimensions,
+                        MetricDimensions.Key.COVERAGE_STATUS
+                ))
                 .addValue("stopReason", optional(
                         dimensions,
                         MetricDimensions.Key.STOP_REASON
@@ -134,15 +155,18 @@ public final class PostgresMetricFactStore implements MetricFactStore {
                     metric_key, metric_definition_version, aggregation, metric_value,
                     space_id, query_case_id, config_fingerprint, strategy,
                     attempt_index, component_model, data_index_version, status,
-                    stop_reason, purpose, time_slice, dataset_id, dataset_version, case_id,
-                    dimensions_json, fact_json, observed_at
+                    technical_status, terminal_status, stage, visit_index, channel,
+                    chain_node, coverage_status, stop_reason, purpose, time_slice,
+                    dataset_id, dataset_version, case_id, dimensions_json, fact_json, observed_at
                 ) VALUES (
                     :tenantId, :factId, :factType, :factScope, :sourceEventId, :executionId,
                     :metricKey, :metricDefinitionVersion, :aggregation, :metricValue,
                     :spaceId, CAST(:queryCaseId AS uuid), :configFingerprint, :strategy,
                     :attemptIndex, :componentModel, :dataIndexVersion, :status,
-                    :stopReason, :purpose, :timeSlice, :datasetId, :datasetVersion, :caseId,
-                    CAST(:dimensionsJson AS jsonb), CAST(:factJson AS jsonb), :observedAt
+                    :technicalStatus, :terminalStatus, :stage, :visitIndex, :channel,
+                    :chainNode, :coverageStatus, :stopReason, :purpose, :timeSlice,
+                    :datasetId, :datasetVersion, :caseId, CAST(:dimensionsJson AS jsonb),
+                    CAST(:factJson AS jsonb), :observedAt
                 )
                 ON CONFLICT DO NOTHING
                 """, parameters);

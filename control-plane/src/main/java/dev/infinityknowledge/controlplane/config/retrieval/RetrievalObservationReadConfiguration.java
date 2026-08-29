@@ -1,6 +1,8 @@
 package dev.infinityknowledge.controlplane.config.retrieval;
 
 import dev.infinityknowledge.evaluation.observation.query.RetrievalObservationReportReader;
+import dev.infinityknowledge.evaluation.observation.query.OnlineRetrievalObservabilityReader;
+import dev.infinityknowledge.store.postgres.observation.PostgresOnlineRetrievalObservabilityReader;
 import dev.infinityknowledge.store.postgres.observation.PostgresRetrievalObservationReportReader;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -18,5 +20,14 @@ public class RetrievalObservationReadConfiguration {
             NamedParameterJdbcTemplate jdbc
     ) {
         return new PostgresRetrievalObservationReportReader(jdbc);
+    }
+
+    /** 注册默认 PostgreSQL 在线聚合读侧；外部可观测存储可替换同一端口。 */
+    @Bean
+    @ConditionalOnMissingBean(OnlineRetrievalObservabilityReader.class)
+    OnlineRetrievalObservabilityReader onlineRetrievalObservabilityReader(
+            NamedParameterJdbcTemplate jdbc
+    ) {
+        return new PostgresOnlineRetrievalObservabilityReader(jdbc);
     }
 }

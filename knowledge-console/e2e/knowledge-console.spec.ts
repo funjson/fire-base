@@ -149,6 +149,22 @@ test.describe.serial('OIDC-backed console journeys', () => {
       '/api/v1/admin/wiki/pages/{pageId}/publish',
       { exact: true },
     )).toBeVisible()
+
+    await openRoute(
+      page,
+      '/observability/retrieval/overview',
+      '用在线运行事实定位检索问题',
+    )
+    await expect(page.getByText('ONLINE 数据已隔离', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('统计窗口')).toBeEnabled()
+    await expect(page.getByLabel('知识空间')).toBeEnabled()
+    const observabilityNavigation = page.getByRole('navigation', {
+      name: '检索观测视图',
+    })
+    await observabilityNavigation.getByRole('link', { name: /分层诊断/ }).click()
+    await expect(page).toHaveURL(/\/observability\/retrieval\/stages/)
+    await observabilityNavigation.getByRole('link', { name: /执行记录/ }).click()
+    await expect(page).toHaveURL(/\/observability\/retrieval\/executions/)
   })
 
   test('admin creates a Space with one immutable processing configuration', async ({

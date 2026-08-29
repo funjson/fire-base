@@ -12,6 +12,7 @@ import dev.infinityknowledge.ingestion.parser.DocumentParserRegistry;
 import dev.infinityknowledge.runtime.extraction.ExtractionRunService;
 import dev.infinityknowledge.spi.extraction.ExtractionRunStore;
 import dev.infinityknowledge.spi.extraction.ExtractionRunStore.PublicationAttributes;
+import dev.infinityknowledge.spi.ingestion.DocumentProcessingContract;
 import dev.infinityknowledge.spi.ingestion.SpaceDocumentProcessingConfigStore;
 import dev.infinityknowledge.spi.objectstorage.ObjectStorage;
 import dev.infinityknowledge.spi.objectstorage.ObjectWriteRequest;
@@ -153,7 +154,17 @@ class IngestionRunApplicationServiceTest {
                         16,
                         "{}"
                 ),
+                DocumentProcessingContract.create(
+                        "pipeline-v7",
+                        "normalizer-schema-v2",
+                        parsers.selectedParserContracts(
+                                parsers.defaultParserSelections()
+                        ),
+                        "cleaner-v1",
+                        "chunker-v1"
+                ),
                 1L,
+                admin().principalId(),
                 NOW
         );
         var runtime = new ExtractionRunService(

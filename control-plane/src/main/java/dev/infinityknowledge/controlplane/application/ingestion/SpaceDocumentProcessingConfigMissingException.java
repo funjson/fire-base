@@ -8,6 +8,7 @@ package dev.infinityknowledge.controlplane.application.ingestion;
  */
 public final class SpaceDocumentProcessingConfigMissingException
         extends RuntimeException {
+    private static final long serialVersionUID = 1L;
 
     public static final String CODE = "SPACE_PROCESSING_CONFIG_MISSING";
     public static final String USER_MESSAGE =

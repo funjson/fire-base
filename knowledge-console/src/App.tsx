@@ -61,8 +61,10 @@ const ConnectorsPage = lazy(() =>
     default: module.ConnectorsPage,
   })),
 )
-const TracesPage = lazy(() =>
-  import('./pages/TracesPage').then((module) => ({ default: module.TracesPage })),
+const RetrievalObservabilityPage = lazy(() =>
+  import('./pages/RetrievalObservabilityPage').then((module) => ({
+    default: module.RetrievalObservabilityPage,
+  })),
 )
 const AuditEventsPage = lazy(() =>
   import('./pages/AuditEventsPage').then((module) => ({
@@ -169,7 +171,47 @@ function AuthGate() {
                 />
                 <Route
                   path="traces"
-                  element={<AdminPage page={<TracesPage />} />}
+                  element={
+                    <AdminPage
+                      page={
+                        <Navigate replace to="/observability/retrieval/executions" />
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="observability/retrieval"
+                  element={
+                    <AdminPage
+                      page={
+                        <Navigate replace to="/observability/retrieval/overview" />
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="observability/retrieval/overview"
+                  element={
+                    <AdminPage
+                      page={<RetrievalObservabilityPage view="overview" />}
+                    />
+                  }
+                />
+                <Route
+                  path="observability/retrieval/stages"
+                  element={
+                    <AdminPage
+                      page={<RetrievalObservabilityPage view="stages" />}
+                    />
+                  }
+                />
+                <Route
+                  path="observability/retrieval/executions"
+                  element={
+                    <AdminPage
+                      page={<RetrievalObservabilityPage view="executions" />}
+                    />
+                  }
                 />
                 <Route
                   path="audit-events"

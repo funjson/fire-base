@@ -106,27 +106,31 @@ class MetricFactTest {
 
         List<MetricFact.Runtime> facts = new RuntimeMetricFactProjector().project(observation);
 
-        assertEquals(8, facts.size());
-        MetricFact.Runtime success = facts.stream()
-                .filter(fact -> "retrieval.request.technical_success".equals(fact.metricKey()))
+        assertEquals(6, facts.size());
+        MetricFact.Runtime stage = facts.stream()
+                .filter(fact -> "retrieval.stage.event.count".equals(fact.metricKey()))
                 .findFirst()
                 .orElseThrow();
-        assertEquals(0.0D, success.value());
+        assertEquals(1.0D, stage.value());
         assertEquals(
                 "ONLINE",
-                success.dimensions().require(MetricDimensions.Key.PURPOSE)
+                stage.dimensions().require(MetricDimensions.Key.PURPOSE)
         );
         assertEquals(
                 RetrievalObservation.UNRESOLVED_CONFIG_FINGERPRINT,
-                success.dimensions().require(MetricDimensions.Key.CONFIG)
+                stage.dimensions().require(MetricDimensions.Key.CONFIG)
+        );
+        assertEquals(
+                "FAILED",
+                stage.dimensions().require(MetricDimensions.Key.TECHNICAL_STATUS)
         );
         assertEquals(
                 "TECHNICAL_FAILED",
-                success.dimensions().require(MetricDimensions.Key.STATUS)
+                stage.dimensions().require(MetricDimensions.Key.TERMINAL_STATUS)
         );
         assertEquals(
                 "TECHNICAL_FAILURE",
-                success.dimensions().require(MetricDimensions.Key.STOP_REASON)
+                stage.dimensions().require(MetricDimensions.Key.STOP_REASON)
         );
     }
 

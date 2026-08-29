@@ -59,9 +59,13 @@ class RetrievalObservationProcessorTest {
                 completed.execution().visitedConfigurations()
         );
         assertEquals(16, facts.values.size());
-        assertEquals(2, facts.executionSnapshot.size());
+        assertEquals(14, facts.executionSnapshot.size());
         assertEquals(1.0D, snapshotValue(facts, "retrieval.request.count"));
-        assertEquals(1.0D, snapshotValue(facts, "retrieval.observation.complete"));
+        assertEquals(1.0D, snapshotValue(
+                facts,
+                "retrieval.observation.complete.rate",
+                MetricFact.Aggregation.RATIO_NUMERATOR
+        ));
         assertEquals(4, facts.snapshotReplacementCount);
         assertTrue(duplicate.duplicate());
         assertTrue(duplicate.facts().isEmpty());
@@ -102,9 +106,18 @@ class RetrievalObservationProcessorTest {
         ));
 
         assertEquals(ObservationCompleteness.INCOMPLETE, result.execution().completeness());
-        assertEquals(2, facts.executionSnapshot.size());
+        assertEquals(6, facts.executionSnapshot.size());
         assertEquals(1.0D, snapshotValue(facts, "retrieval.request.count"));
-        assertEquals(0.0D, snapshotValue(facts, "retrieval.observation.complete"));
+        assertEquals(0.0D, snapshotValue(
+                facts,
+                "retrieval.observation.complete.rate",
+                MetricFact.Aggregation.RATIO_NUMERATOR
+        ));
+        assertEquals(
+                MetricDimensions.UNOBSERVED_TECHNICAL_STATUS,
+                facts.executionSnapshot.getFirst().dimensions()
+                        .require(MetricDimensions.Key.TECHNICAL_STATUS)
+        );
     }
 
     @Test
@@ -135,11 +148,23 @@ class RetrievalObservationProcessorTest {
                 .filter(fact -> "retrieval.request.count".equals(fact.metricKey()))
                 .mapToDouble(MetricFact.Runtime::value)
                 .sum());
-        assertEquals(0.5D, allSnapshots.stream()
-                .filter(fact -> "retrieval.observation.complete".equals(fact.metricKey()))
+        double completeNumerator = allSnapshots.stream()
+                .filter(fact -> "retrieval.observation.complete.rate".equals(
+                        fact.metricKey()
+                ))
+                .filter(fact -> fact.aggregation()
+                        == MetricFact.Aggregation.RATIO_NUMERATOR)
                 .mapToDouble(MetricFact.Runtime::value)
-                .average()
-                .orElseThrow());
+                .sum();
+        double completeDenominator = allSnapshots.stream()
+                .filter(fact -> "retrieval.observation.complete.rate".equals(
+                        fact.metricKey()
+                ))
+                .filter(fact -> fact.aggregation()
+                        == MetricFact.Aggregation.RATIO_DENOMINATOR)
+                .mapToDouble(MetricFact.Runtime::value)
+                .sum();
+        assertEquals(0.5D, completeNumerator / completeDenominator);
     }
 
     @Test
@@ -175,13 +200,19 @@ class RetrievalObservationProcessorTest {
                 RetrievalStopReason.SUFFICIENCY_THRESHOLD_REACHED
         ));
 
-        assertFalse(facts.values.stream().anyMatch(
-                fact -> "retrieval.coverage.sufficient".equals(fact.metricKey())
+        assertFalse(facts.values.stream().anyMatch(fact ->
+                "retrieval.coverage.final_sufficient.rate".equals(fact.metricKey())
         ));
-        assertEquals(3, facts.executionSnapshot.size());
-        assertEquals(1.0D, snapshotValue(facts, "retrieval.coverage.sufficient"));
-        assertEquals(1L, facts.executionSnapshot.stream()
-                .filter(fact -> "retrieval.coverage.sufficient".equals(fact.metricKey()))
+        assertEquals(22, facts.executionSnapshot.size());
+        assertEquals(1.0D, snapshotValue(
+                facts,
+                "retrieval.coverage.final_sufficient.rate",
+                MetricFact.Aggregation.RATIO_NUMERATOR
+        ));
+        assertEquals(2L, facts.executionSnapshot.stream()
+                .filter(fact -> "retrieval.coverage.final_sufficient.rate".equals(
+                        fact.metricKey()
+                ))
                 .count());
     }
 
@@ -220,10 +251,23 @@ class RetrievalObservationProcessorTest {
         List<MetricFact.Runtime> coverageConclusions = facts.snapshotsByExecution.values()
                 .stream()
                 .flatMap(List::stream)
-                .filter(fact -> "retrieval.coverage.sufficient".equals(fact.metricKey()))
+                .filter(fact -> "retrieval.coverage.final_sufficient.rate".equals(
+                        fact.metricKey()
+                ))
                 .toList();
-        assertEquals(1, coverageConclusions.size());
-        assertEquals(0.0D, coverageConclusions.getFirst().value());
+        assertEquals(2, coverageConclusions.size());
+        assertEquals(0.0D, coverageConclusions.stream()
+                .filter(fact -> fact.aggregation()
+                        == MetricFact.Aggregation.RATIO_NUMERATOR)
+                .findFirst()
+                .orElseThrow()
+                .value());
+        assertEquals(1.0D, coverageConclusions.stream()
+                .filter(fact -> fact.aggregation()
+                        == MetricFact.Aggregation.RATIO_DENOMINATOR)
+                .findFirst()
+                .orElseThrow()
+                .value());
     }
 
     private static RetrievalObservation started(UUID executionId, UUID requestId) {
@@ -423,8 +467,17 @@ class RetrievalObservationProcessorTest {
     }
 
     private static double snapshotValue(CapturingMetricFactStore store, String metricKey) {
+        return snapshotValue(store, metricKey, null);
+    }
+
+    private static double snapshotValue(
+            CapturingMetricFactStore store,
+            String metricKey,
+            MetricFact.Aggregation aggregation
+    ) {
         return store.executionSnapshot.stream()
                 .filter(fact -> metricKey.equals(fact.metricKey()))
+                .filter(fact -> aggregation == null || fact.aggregation() == aggregation)
                 .findFirst()
                 .orElseThrow()
                 .value();

@@ -58,7 +58,15 @@ class RetrievalObservationControllerTest {
         assertEquals(1, view.events().size());
         assertEquals(1, view.metrics().size());
         assertEquals(
+                RetrievalObservationStatus.SUCCEEDED.name(),
+                view.metrics().getFirst().dimensions().technicalStatus()
+        );
+        assertEquals(
                 RetrievalTerminalStatus.SUFFICIENT.name(),
+                view.metrics().getFirst().dimensions().terminalStatus()
+        );
+        assertEquals(
+                RetrievalObservationStatus.SUCCEEDED.name(),
                 view.metrics().getFirst().dimensions().status()
         );
         assertEquals(
@@ -136,6 +144,7 @@ class RetrievalObservationControllerTest {
                         1.0D,
                         MetricDimensions.builder()
                                 .config("a".repeat(64))
+                                .status(RetrievalObservationStatus.SUCCEEDED)
                                 .terminalStatus(RetrievalTerminalStatus.SUFFICIENT)
                                 .stopReason(
                                         RetrievalStopReason.SUFFICIENCY_THRESHOLD_REACHED

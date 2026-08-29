@@ -838,6 +838,188 @@ export type RetrievalObservationReport = {
   metrics: RetrievalObservationMetric[]
 }
 
+/** 线上检索指标使用统一时间和版本过滤；用途由服务端固定为 ONLINE。 */
+export type RetrievalObservabilityFilter = {
+  from: string
+  to: string
+  spaceId?: string
+  configFingerprint?: string
+  dataIndexVersion?: string
+}
+
+/** 比例同时携带分子和分母，避免控制台把空样本误判成 0%。 */
+export type RetrievalObservabilityRate = {
+  numerator: number
+  denominator: number
+  value: number | null
+}
+
+/** 延迟分布携带自身样本数；无样本时所有分位值为 null。 */
+export type RetrievalObservabilityPercentiles = {
+  sampleCount: number
+  p50: number | null
+  p95: number | null
+  p99: number | null
+}
+
+/** 固定时间桶内的在线运行与代理质量事实。 */
+export type OnlineOverviewPoint = {
+  bucketStart: string
+  requestCount: number
+  technicalSuccessRate: RetrievalObservabilityRate
+  degradedRate: RetrievalObservabilityRate
+  latencyMillis: RetrievalObservabilityPercentiles
+  terminalObservationRate: RetrievalObservabilityRate
+  firstCoverageSufficientRate: RetrievalObservabilityRate
+  finalCoverageSufficientRate: RetrievalObservabilityRate
+  observationCompleteRate: RetrievalObservabilityRate
+}
+
+/** 一个受控配置或索引版本覆盖的去重执行数量。 */
+export type RetrievalDimensionCount = {
+  value: string
+  count: number
+}
+
+/** 在线总览只描述运行事实和代理质量，不替代 Gold Dataset 的真实能力指标。 */
+export type OnlineRetrievalOverview = {
+  from: string
+  to: string
+  granularity: string
+  requestCount: number
+  configFingerprints: RetrievalDimensionCount[]
+  dataIndexVersions: RetrievalDimensionCount[]
+  technicalSuccessRate: RetrievalObservabilityRate
+  degradedRate: RetrievalObservabilityRate
+  endToEndLatencyMillis: RetrievalObservabilityPercentiles
+  terminalObservationRate: RetrievalObservabilityRate
+  firstCoverageSufficientRate: RetrievalObservabilityRate
+  finalCoverageSufficientRate: RetrievalObservabilityRate
+  coverageRecoveryRate: RetrievalObservabilityRate
+  budgetExhaustedRate: RetrievalObservabilityRate
+  observationCompleteRate: RetrievalObservabilityRate
+  series: OnlineOverviewPoint[]
+}
+
+/** 通用检索阶段的吞吐、技术成功和输入输出规模。 */
+export type RetrievalStageDiagnostic = {
+  stage: string
+  executionCount: number
+  eventCount: number
+  metricDefinitionVersion: number | null
+  successRate: RetrievalObservabilityRate
+  latencyMillis: RetrievalObservabilityPercentiles
+  averageInputCount: number | null
+  averageOutputCount: number | null
+}
+
+/** 按召回通道、策略、组件和索引版本隔离的分支汇总。 */
+export type RetrievalBranchDiagnostic = {
+  strategy: string
+  channel: string
+  componentModel: string
+  dataIndexVersion: string
+  executionCount: number
+  eventCount: number
+  successRate: RetrievalObservabilityRate
+  emptyRate: RetrievalObservabilityRate
+  averageCandidateCount: number | null
+  latencyMillis: RetrievalObservabilityPercentiles
+}
+
+/** RRF 融合阶段的去重与候选规模汇总。 */
+export type RetrievalFusionDiagnostic = {
+  executionCount: number
+  duplicateRate: RetrievalObservabilityRate
+  averageInputCandidateCount: number | null
+  averageUniqueCandidateCount: number | null
+  latencyMillis: RetrievalObservabilityPercentiles
+}
+
+/** Reranker 执行、模型回退和候选规模汇总。 */
+export type RetrievalRerankDiagnostic = {
+  executionCount: number
+  executedRate: RetrievalObservabilityRate
+  fallbackRate: RetrievalObservabilityRate
+  averageInputCandidateCount: number | null
+  averageOutputCandidateCount: number | null
+  modelRequestCount: number
+  latencyMillis: RetrievalObservabilityPercentiles
+}
+
+/** Coverage Judge 的在线代理质量事实。 */
+export type RetrievalCoverageDiagnostic = {
+  executionCount: number
+  checkCount: number
+  measuredCount: number
+  sufficientRate: RetrievalObservabilityRate
+  averageScore: number | null
+  averageRetainedCandidateCount: number | null
+  modelRequestCount: number
+  latencyMillis: RetrievalObservabilityPercentiles
+}
+
+/** 单个优化 Chain 节点的代理增益和运行成本。 */
+export type RetrievalChainDiagnostic = {
+  node: string
+  strategy: string
+  executionCount: number
+  eventCount: number
+  positiveGainRate: RetrievalObservabilityRate
+  averageCoverageDelta: number | null
+  modelRequestCount: number
+  latencyMillis: RetrievalObservabilityPercentiles
+}
+
+/** 在线检索各层聚合诊断结果。 */
+export type RetrievalStageDiagnostics = {
+  from: string
+  to: string
+  stageRows: RetrievalStageDiagnostic[]
+  branchRows: RetrievalBranchDiagnostic[]
+  fusion: RetrievalFusionDiagnostic
+  rerank: RetrievalRerankDiagnostic
+  coverage: RetrievalCoverageDiagnostic
+  chainRows: RetrievalChainDiagnostic[]
+}
+
+/** 单次 ONLINE 执行的安全摘要，不含查询和候选正文。 */
+export type RetrievalExecutionItem = {
+  requestId: string
+  executionId: string
+  startedAt: string
+  lastObservedAt: string
+  completedAt: string | null
+  durationMillis: number | null
+  completeness: string
+  technicalStatus: string | null
+  terminalStatus: string | null
+  stopReason: string | null
+  degraded: boolean | null
+  attemptCount: number | null
+  resultCount: number | null
+  eventCount: number
+  spaceIds: string[]
+  configFingerprints: string[]
+}
+
+/** 在线执行记录分页结果。 */
+export type RetrievalExecutionPage = {
+  page: number
+  size: number
+  totalItems: number
+  totalPages: number
+  items: RetrievalExecutionItem[]
+}
+
+/** 在线执行记录在公共过滤之外允许追加的分页和终态过滤。 */
+export type RetrievalExecutionFilter = RetrievalObservabilityFilter & {
+  page?: number
+  size?: number
+  terminalStatus?: string
+  stopReason?: string
+}
+
 export type GraphNode = {
   id: string
   type: string
@@ -1310,6 +1492,18 @@ export function createApi(getToken: () => string | undefined) {
       request<RetrievalObservationReport>(
         `/api/v1/retrieval-observations/requests/${encodeURIComponent(requestId)}`,
       ),
+    onlineRetrievalOverview: (filter: RetrievalObservabilityFilter) =>
+      request<OnlineRetrievalOverview>(
+        `/api/v1/retrieval-observability/online/overview?${retrievalObservabilityParameters(filter)}`,
+      ),
+    retrievalStageDiagnostics: (filter: RetrievalObservabilityFilter) =>
+      request<RetrievalStageDiagnostics>(
+        `/api/v1/retrieval-observability/online/stages?${retrievalObservabilityParameters(filter)}`,
+      ),
+    retrievalExecutions: (filter: RetrievalExecutionFilter) =>
+      request<RetrievalExecutionPage>(
+        `/api/v1/retrieval-observability/online/executions?${retrievalObservabilityParameters(filter)}`,
+      ),
     graphSearch: (body: {
       query: string
       spaceIds: string[]
@@ -1358,6 +1552,29 @@ export function createApi(getToken: () => string | undefined) {
     run: (runId: string) =>
       request<EvaluationRun>(`/api/v1/evaluations/runs/${runId}`),
   }
+}
+
+function retrievalObservabilityParameters(
+  filter: RetrievalExecutionFilter,
+): string {
+  const parameters = new URLSearchParams({
+    from: filter.from,
+    to: filter.to,
+  })
+  if (filter.spaceId) parameters.set('spaceId', filter.spaceId)
+  if (filter.configFingerprint) {
+    parameters.set('configFingerprint', filter.configFingerprint)
+  }
+  if (filter.dataIndexVersion) {
+    parameters.set('dataIndexVersion', filter.dataIndexVersion)
+  }
+  if (filter.page !== undefined) parameters.set('page', String(filter.page))
+  if (filter.size !== undefined) parameters.set('size', String(filter.size))
+  if (filter.terminalStatus) {
+    parameters.set('terminalStatus', filter.terminalStatus)
+  }
+  if (filter.stopReason) parameters.set('stopReason', filter.stopReason)
+  return parameters.toString()
 }
 
 export type KnowledgeApi = ReturnType<typeof createApi>

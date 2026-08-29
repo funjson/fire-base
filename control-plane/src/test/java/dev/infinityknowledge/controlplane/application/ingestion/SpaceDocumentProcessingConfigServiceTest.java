@@ -75,7 +75,7 @@ class SpaceDocumentProcessingConfigServiceTest {
         when(store.find(TENANT_ID, SPACE_ID)).thenReturn(Optional.empty());
 
         assertThrows(
-                IllegalStateException.class,
+                SpaceDocumentProcessingConfigMissingException.class,
                 () -> service(store, capabilities).get(admin(), SPACE_ID.value())
         );
 

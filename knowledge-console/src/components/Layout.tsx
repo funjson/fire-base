@@ -28,7 +28,12 @@ const navigation = [
     adminOnly: false,
   },
   { to: '/connectors', label: '数据源管理', icon: Cable, adminOnly: true },
-  { to: '/traces', label: '检索监控', icon: Activity, adminOnly: true },
+  {
+    to: '/observability/retrieval',
+    label: '检索观测',
+    icon: Activity,
+    adminOnly: true,
+  },
   { to: '/audit-events', label: '操作审计', icon: ShieldCheck, adminOnly: true },
 ]
 

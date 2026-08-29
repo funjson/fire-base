@@ -1,6 +1,7 @@
 package dev.infinityknowledge.store.postgres.observation;
 
 import dev.infinityknowledge.domain.retrieval.observation.RetrievalObservation;
+import dev.infinityknowledge.domain.retrieval.observation.RetrievalObservationPayload;
 import dev.infinityknowledge.evaluation.observation.RetrievalExecutionObservation;
 import dev.infinityknowledge.evaluation.observation.store.RetrievalExecutionProjectionStore;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -36,6 +37,9 @@ public final class PostgresRetrievalExecutionProjectionStore
         RetrievalObservation first = execution.events().getFirst();
         RetrievalObservation last = execution.events().getLast();
         var terminal = execution.terminalEvent();
+        var terminalPayload = terminal.map(value ->
+                (RetrievalObservationPayload.ExecutionTerminal) value.payload()
+        );
         var firstEventAt = execution.events().stream()
                 .map(RetrievalObservation::startedAt)
                 .min(Comparator.naturalOrder())
@@ -61,9 +65,23 @@ public final class PostgresRetrievalExecutionProjectionStore
                 )
                 .addValue("eventCount", execution.events().size())
                 .addValue("lastSequence", last.sequence())
-                .addValue("terminalStatus", terminal.map(value -> value.status().name()).orElse(null))
-                .addValue("terminalReasonCode", terminal.map(
-                        RetrievalObservation::reasonCode
+                .addValue("terminalStatus", terminalPayload.map(value ->
+                        value.terminalStatus().name()
+                ).orElse(null))
+                .addValue("terminalReasonCode", terminalPayload.map(value ->
+                        value.stopReason().name()
+                ).orElse(null))
+                .addValue("technicalStatus", terminal.map(value ->
+                        value.status().name()
+                ).orElse(null))
+                .addValue("degraded", terminalPayload.map(
+                        RetrievalObservationPayload.ExecutionTerminal::degraded
+                ).orElse(null))
+                .addValue("retrievalAttemptCount", terminalPayload.map(
+                        RetrievalObservationPayload.ExecutionTerminal::retrievalAttemptCount
+                ).orElse(null))
+                .addValue("resultCount", terminalPayload.map(
+                        RetrievalObservationPayload.ExecutionTerminal::resultCount
                 ).orElse(null))
                 .addValue("firstEventAt", OffsetDateTime.ofInstant(firstEventAt, ZoneOffset.UTC))
                 .addValue("lastEventAt", OffsetDateTime.ofInstant(lastEventAt, ZoneOffset.UTC))
@@ -74,7 +92,8 @@ public final class PostgresRetrievalExecutionProjectionStore
                     tenant_id, execution_id, request_id, purpose, completeness,
                     incomplete_reasons_json, missing_sequences_json,
                     visited_configurations_json, event_count, last_sequence,
-                    terminal_status, terminal_reason_code, first_event_at,
+                    terminal_status, terminal_reason_code, technical_status,
+                    degraded, retrieval_attempt_count, result_count, first_event_at,
                     last_event_at, schema_version, updated_at
                 ) VALUES (
                     :tenantId, :executionId, :requestId, :purpose, :completeness,
@@ -82,6 +101,7 @@ public final class PostgresRetrievalExecutionProjectionStore
                     CAST(:missingSequencesJson AS jsonb),
                     CAST(:visitedConfigurationsJson AS jsonb),
                     :eventCount, :lastSequence, :terminalStatus, :terminalReasonCode,
+                    :technicalStatus, :degraded, :retrievalAttemptCount, :resultCount,
                     :firstEventAt, :lastEventAt, :schemaVersion, :updatedAt
                 )
                 ON CONFLICT (tenant_id, execution_id) DO UPDATE
@@ -95,6 +115,10 @@ public final class PostgresRetrievalExecutionProjectionStore
                         last_sequence = EXCLUDED.last_sequence,
                         terminal_status = EXCLUDED.terminal_status,
                         terminal_reason_code = EXCLUDED.terminal_reason_code,
+                        technical_status = EXCLUDED.technical_status,
+                        degraded = EXCLUDED.degraded,
+                        retrieval_attempt_count = EXCLUDED.retrieval_attempt_count,
+                        result_count = EXCLUDED.result_count,
                         first_event_at = LEAST(
                             retrieval_execution_observation.first_event_at,
                             EXCLUDED.first_event_at
